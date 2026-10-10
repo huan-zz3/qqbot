@@ -111,11 +111,19 @@ BOT_PRIVATE_USERS=允许私聊的QQ号,逗号分隔
 ### 3. 运行
 
 ```bash
-pnpm build
-pnpm start
+pnpm build        # tsc 编译 + 打成单文件可执行 dist/qqbot
+pnpm start        # 用 node 跑 dist/index.js（开发/调试仍可用）
 ```
 
-长期运行可以用 `deploy/qqbot.service`（按注释改好用户和路径）：
+`pnpm build` 会先用 `tsc` 编到 `dist/`，再用 esbuild + Node SEA 把它连同依赖汇成单文件可执行 `dist/qqbot`。它自包含、不需要 `node_modules` 和 Node 运行时，但仍要在 cwd 下读到 `data/` 与 `.env`（或环境变量）。
+
+```bash
+./dist/qqbot      # 直接跑可执行文件
+```
+
+只想要 `dist/` 里的 JS（不打可执行）时用 `pnpm build:js`。
+
+长期运行可以用 `deploy/qqbot.service`（按注释改好用户和路径，已默认指向 `dist/qqbot`）：
 
 ```bash
 sudo install -m 644 deploy/qqbot.service /etc/systemd/system/

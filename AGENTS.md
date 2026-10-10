@@ -10,7 +10,7 @@
 
 - `pnpm test` — `tsx --test tests/*.test.ts`，用 Node 内置 `node:test`（无测试框架）。跑单个文件：`pnpm exec tsx --test tests/gate.test.ts`。
 - `pnpm typecheck` — `tsc --noEmit`。`tsconfig.json` 的 `include` 只有 `src`，**tests/ 不被类型检查**。
-- `pnpm dev`（tsx watch）/ `pnpm build`（`tsc` → `dist/`）/ `pnpm start`（`node dist/index.js`）。
+- `pnpm dev`（tsx watch）/ `pnpm build`（`tsc` → `dist/`，再用 esbuild+Node SEA 打成单文件可执行 `dist/qqbot`；只编 JS 用 `pnpm build:js`）/ `pnpm start`（`node dist/index.js`）。
 - `pnpm learn-history [条数]` — 停掉 bot 后从 NapCat 历史补学记忆（需先 `pnpm build`）。
 - 没有 linter / formatter 配置，不要假设有 `lint` 步骤。
 
@@ -34,7 +34,7 @@
 - `src/chat/memory.ts` 长期记忆（群/私聊分开，按 QQ 号）；`power.ts` 管理员 `/启动` `/停止`（持久化）；`history.ts` 会话消息记录。
 - `src/llm/deepseek.ts` deepseek-flash 工具循环、识图、JSON（失败重试一次）。
 - `src/search/` Codex access token（只读、过期重读）与 web_search；`src/cli/learn-history.ts` 历史补学。
-- `deploy/` systemd unit、`sync-codex-auth.sh`（只同步 access token）。
+- `deploy/` systemd unit、`sync-codex-auth.sh`（只同步 access token）；`scripts/build-sea.mjs` 打包单文件可执行。
 
 ## 约定
 

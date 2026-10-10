@@ -1,4 +1,4 @@
-# Adjust User, WorkingDirectory and the node path to your install, then:
+# Adjust User, WorkingDirectory and executable path to your install, then:
 #   sudo install -m 644 deploy/qqbot.service /etc/systemd/system/ && sudo systemctl enable --now qqbot
 [Unit]
 Description=qqbot: jev decides, deepseek-flash replies
@@ -7,9 +7,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=azureuser
-WorkingDirectory=/home/azureuser/qqbot
-ExecStart=/home/azureuser/.nvm/versions/node/v22.23.2/bin/node dist/index.js
+User=huanzze
+WorkingDirectory=/home/huanzze/Dev/qqbot
+# 由 `pnpm build` 产出的自包含可执行文件；无需 Node 运行时与 node_modules。
+ExecStart=/home/huanzze/Dev/qqbot/dist/qqbot
 Restart=always
 RestartSec=5
 MemoryMax=300M
