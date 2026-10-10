@@ -14,6 +14,7 @@ import { completeJson } from "../llm/deepseek.js";
 import { NapcatClient } from "../napcat/client.js";
 import { renderSegments, toSegments } from "../napcat/message.js";
 import type { MessageEvent } from "../napcat/types.js";
+import { installProxy } from "../proxy.js";
 
 // 一次性脚本：从白名单会话的近期 NapCat 历史补学记忆。先停掉 bot，
 // 否则它自己的记忆整理会把这里写入的内容覆盖掉。
@@ -22,6 +23,8 @@ const COUNT = Number(process.argv[2] ?? 60);
 
 // 事件回调传空：本脚本只主动调用接口，不消费推送。
 const client = new NapcatClient(() => undefined);
+// 整理记忆会用 DeepSeek 出网，先安装代理；留空则直连。
+installProxy(config.proxy.url);
 client.connect();
 // 等 WS 连接就绪（connect 异步建立连接，之后才能调接口）。
 await new Promise((resolve) => setTimeout(resolve, 2000));

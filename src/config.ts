@@ -59,6 +59,10 @@ const DEFAULT_PERSONA = "是群里的一个 AI 群友。";
 export const config = {
   // 日志级别：debug/info/warn/error/silent。
   logLevel: str("LOG_LEVEL", "info"),
+  // 网络代理：非空则所有 HTTP 出网走该 HTTP 代理，留空则直连。
+  proxy: {
+    url: str("PROXY_URL"),
+  },
   // NapCat 正向 WS 连接（NapCat 是服务端）与各种超时/节流。
   napcat: {
     url: str("NAPCAT_WS_URL", "ws://127.0.0.1:3001"),

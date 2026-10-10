@@ -20,10 +20,14 @@ import { logger } from "./logger.js";
 import { Moderation } from "./moderation/moderation.js";
 import { NapcatClient } from "./napcat/client.js";
 import { isMessageEvent } from "./napcat/types.js";
+import { installProxy } from "./proxy.js";
 import { CodexAuth } from "./search/codex-auth.js";
 import { CodexWebSearch } from "./search/web-search.js";
 
 async function main(): Promise<void> {
+  // 最早安装代理：让后续所有 fetch（含 jev SDK）都走 PROXY_URL；留空则直连。
+  const proxyOn = installProxy(config.proxy.url);
+
   // 没有 DeepSeek key 无法回话，直接以非零码退出。
   if (!config.deepseek.apiKey) {
     logger.error("缺少 DEEPSEEK_API_KEY");
@@ -68,7 +72,7 @@ async function main(): Promise<void> {
   const groups = [...config.bot.groups].join(",") || "（无）";
   const privateUsers = [...config.bot.privateUsers].join(",") || "（无）";
   logger.info(
-    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} jev=${judge ? config.jev.model : "off"} search=${search ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   // runtime/moderation 先声明再赋值：构造 client 时的事件回调闭包会引用它们。

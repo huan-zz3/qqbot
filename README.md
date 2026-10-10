@@ -155,6 +155,7 @@ deploy/sync-codex-auth.sh user@your-server
 | `STICKERS_MAX` | 300 | 表情包收藏上限，满了淘汰最少用的 |
 | `MEMORY_LEARN_DELAY_MS` | 10000 | 回复后等对话停下多久整理记忆 |
 | `MEMORY_LEARN_BATCH` | 30 | 未整理的消息攒够这么多就整理（仅限它最近 30 分钟说过话的会话） |
+| `PROXY_URL` | | 填 HTTP 代理地址（如 `http://127.0.0.1:7890`）则所有联网请求都走它；留空直连 |
 
 ## 表情包与记忆
 
@@ -197,6 +198,7 @@ deploy/sync-codex-auth.sh user@your-server
 src/
 ├── index.ts              启动、依赖组装
 ├── config.ts             环境变量
+├── proxy.ts              网络代理（PROXY_URL）
 ├── napcat/               WS 客户端、OneBot 类型、消息段渲染、QQ 表情表
 ├── chat/
 │   ├── runtime.ts        会话：防抖、判断、回复、发送、触发记忆整理
