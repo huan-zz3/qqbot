@@ -35,7 +35,6 @@ const PLACEHOLDERS: Record<string, string> = {
   rps: "[猜拳]",
   record: "[语音]",
   video: "[视频]",
-  file: "[文件]",
   forward: "[合并转发]",
   node: "[合并转发]",
   json: "[卡片]",
@@ -100,6 +99,16 @@ export function markdownToText(content: string): string {
 }
 
 /**
+ * 字节数转人类可读大小（B/KB/MB），用于文件占位文本；均为纯函数便于单测。
+ * @param bytes 字节数（非负数）
+ */
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+/**
  * 把消息段数组渲染成一行人类可读文本（聊天记录与模型输入共用）。
  * 规则：
  * - text 直接保留（跳过与 markdown 段重复的 fallback 文本）；
@@ -107,6 +116,7 @@ export function markdownToText(content: string): string {
  *   再查 ctx.atName，最后用「某人」——绝不输出 QQ 号；
  * - image/mface：按 isSticker 分为 [表情包]/[图片]，有识图描述时带「：描述」；
  * - face：查表显示 [名称]，未知 ID 显示 [表情]；
+ * - file：有文件名时渲染成 [文件：名字（大小）]，无名字回退 [文件]；
  * - reply：不渲染（引用关系由上层另取）；其余类型查 PLACEHOLDERS 占位。
  * @param segments 入站消息段数组（通常来自 toSegments）
  * @param ctx 渲染上下文
@@ -163,6 +173,14 @@ export function renderSegments(segments: Segment[], ctx: RenderContext): string 
       case "reply":
         // reply 段不进入正文：引用关系由上层用 replyTargetId 单独解析。
         break;
+      case "file": {
+        // 群文件/私聊文件：文件名 + 大小（协议端可能不带 file_size）。
+        const name = typeof seg.data.file === "string" ? seg.data.file : "";
+        const size = Number(seg.data.file_size);
+        const label = name && Number.isFinite(size) && size > 0 ? `${name}（${formatSize(size)}）` : name;
+        parts.push(label ? `[文件：${label}]` : "[文件]");
+        break;
+      }
       default:
         // 其余段类型查占位表；表里没有的用 [类型名] 兜底。
         parts.push(PLACEHOLDERS[seg.type] ?? `[${seg.type}]`);

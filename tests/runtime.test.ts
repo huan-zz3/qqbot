@@ -115,7 +115,7 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 test("@bot with a modest jev score gets a reply", async () => {
   const { runtime, sent, prompts } = setup(async () => ({ should_reply: 0.5, addressed: 1 }), ["在的\n咋了"]);
   runtime.handle(groupMessage("在吗", [{ type: "at", data: { qq: String(SELF) } }]));
-  await wait(1200);
+  await wait(2000);
   assert.equal(sent.length, 2);
   assert.deepEqual(sent[0]!.target, { groupId: 500 });
   assert.deepEqual(sent[0]!.message, [{ type: "text", data: { text: "在的" } }]);
@@ -443,4 +443,154 @@ test("a batch with no moderation hit replies as usual", async () => {
   runtime.handle(groupMessage("在吗"));
   await wait(200);
   assert.equal(sent.length, 1);
+});
+
+// 模型调用 opencode 且本批发言人带有文本文件时，把文件内容作为上下文前置注入 opencode 的 prompt。
+test("a text file from the current speaker is injected into the opencode call", async () => {
+  const { runtime } = setup(async () => ({ should_reply: 0.9, addressed: 0.9 }), ["看完了"]);
+  // 假文件存储：记录被读取的 ref，返回文本内容。
+  const readRefs: { name: string }[] = [];
+  (runtime as unknown as { deps: { files: unknown } }).deps.files = {
+    read: async (ref: { name: string }) => {
+      readRefs.push(ref);
+      return { status: "text", content: "文件正文", truncated: false };
+    },
+  };
+  // 假 opencode：记录收到的 prompt（应含文件内容）。
+  const agentPrompts: string[] = [];
+  (runtime as unknown as { deps: { opencode: unknown } }).deps.opencode = {
+    run: async (prompt: string) => {
+      agentPrompts.push(prompt);
+      return "看完了";
+    },
+  };
+  // 第一轮返回 opencode 工具调用，第二轮收尾；模型最终输出 "看完了"。
+  // 自定义 fetch 同时记录首轮 user 消息（聊天记录），替代 setup 的记录器。
+  const transcripts: string[] = [];
+  let round = 0;
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    round++;
+    const body = JSON.parse(String(init.body));
+    if (round === 1) {
+      transcripts.push(body.messages.at(-1).content);
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: null,
+                tool_calls: [
+                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "查看文件" }) } },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: "看完了" } }] }), { status: 200 });
+  }) as typeof fetch;
+
+  runtime.handle(
+    groupMessage("帮我看看这个文件", [{ type: "file", data: { file: "报告.txt", file_id: "f1", file_size: 1024 } }]),
+  );
+  await wait(400);
+
+  // 聊天记录里文件渲染为 [文件：名（大小）]，模型据此知道有可引用的文件。
+  assert.match(transcripts[0]!, /\[文件：报告\.txt（1\.0KB）\]/);
+  assert.deepEqual(readRefs.map((ref) => ref.name), ["报告.txt"]);
+  assert.match(agentPrompts[0]!, /文件正文/);
+  assert.match(agentPrompts[0]!, /查看文件/);
+});
+
+// 非文本文件：opencode 上下文里说明无法读取（带上原因），而不是静默省略。
+test("an unsupported file is reported in the opencode context", async () => {
+  const { runtime } = setup(async () => ({ should_reply: 0.9, addressed: 0.9 }), ["看完了"]);
+  (runtime as unknown as { deps: { files: unknown } }).deps.files = {
+    read: async () => ({ status: "unsupported", reason: "只支持文本类文件" }),
+  };
+  const agentPrompts: string[] = [];
+  (runtime as unknown as { deps: { opencode: unknown } }).deps.opencode = {
+    run: async (prompt: string) => {
+      agentPrompts.push(prompt);
+      return "看完了";
+    },
+  };
+  let round = 0;
+  globalThis.fetch = (async () => {
+    round++;
+    if (round === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: null,
+                tool_calls: [
+                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "看看" }) } },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: "看完了" } }] }), { status: 200 });
+  }) as typeof fetch;
+
+  runtime.handle(groupMessage("看看这个包", [{ type: "file", data: { file: "archive.zip", file_id: "z1", file_size: 10 } }]));
+  await wait(400);
+  assert.match(agentPrompts[0]!, /无法读取：只支持文本类文件/);
+});
+
+// 只有本批发言人的文件会被注入：上一批别人发的文件不进本次 opencode 上下文。
+test("files from other senders are not injected", async () => {
+  let judged = 0;
+  const { runtime } = setup(async () => {
+    judged++;
+    return { should_reply: judged === 1 ? 0.1 : 0.9, addressed: 0.9 };
+  }, ["看完了"]);
+  (runtime as unknown as { deps: { files: unknown } }).deps.files = {
+    read: async () => ({ status: "text", content: "机密内容", truncated: false }),
+  };
+  const agentPrompts: string[] = [];
+  (runtime as unknown as { deps: { opencode: unknown } }).deps.opencode = {
+    run: async (prompt: string) => {
+      agentPrompts.push(prompt);
+      return "看完了";
+    },
+  };
+  let round = 0;
+  globalThis.fetch = (async () => {
+    round++;
+    if (round === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: null,
+                tool_calls: [
+                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "看看" }) } },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: "看完了" } }] }), { status: 200 });
+  }) as typeof fetch;
+
+  // 第一批：用户 8 只发文件，jev 说不回复（不触发 opencode）。
+  runtime.handle(groupMessage("", [{ type: "file", data: { file: "机密.txt", file_id: "s1", file_size: 10 } }], 500, 8));
+  await wait(200);
+  // 第二批：用户 7 提问，opencode 上下文里不应包含 8 的文件内容。
+  runtime.handle(groupMessage("看看代码", [{ type: "at", data: { qq: String(SELF) } }], 500, 7));
+  await wait(300);
+  assert.equal(agentPrompts.length, 1);
+  assert.doesNotMatch(agentPrompts[0]!, /机密内容/);
 });

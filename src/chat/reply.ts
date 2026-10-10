@@ -16,6 +16,7 @@
 import { config } from "../config.js";
 import { FACE_IDS } from "../napcat/faces.js";
 import { chatWithTools, type ChatMessage, type Tool } from "../llm/deepseek.js";
+import { logger } from "../logger.js";
 import type { OpenCodeAgent } from "../opencode/agent.js";
 import type { CodexWebSearch } from "../search/web-search.js";
 import { formatLine, type ChatRecord, type Scope } from "./history.js";
@@ -34,6 +35,7 @@ export type ReplyContext = {
   stickers: { id: number; description: string }[]; // 可发的表情包清单
   memories: string[]; // 与聊天相关的长期记忆
   now: number; // 当前时间戳（毫秒）
+  filesEnabled?: boolean; // 是否启用了聊天文件能力（影响 opencode 提示词里是否说明文件）
 };
 
 /** 一条待发送的回复片段：普通文字，或某编号的收藏表情包。 */
@@ -77,6 +79,12 @@ export function buildSystemPrompt(ctx: ReplyContext, toolNames: string[]): strin
   if (toolNames.includes("opencode")) {
     // 只读能力：说明文案来自 config.opencode.prompt，用户可自定义何时调用。
     lines.push(config.opencode.prompt);
+    if (ctx.filesEnabled) {
+      // 文件能力的事实说明：只陈述可引用与可选读取，不写语气/示例。
+      lines.push(
+        "聊天记录里的 [文件：…] 是群友发来的文件。当你需要查看文件内容时，可以调用 opencode，系统会把相关的人最近发来的文本类文件内容一并交给它。其他类型（图片、压缩包、音视频、Office 文档等）无法读取。",
+      );
+    }
   }
   if (ctx.stickers.length > 0) {
     // 编号清单与 postProcess 的 [表情包#编号] 解析一一对应。
@@ -228,8 +236,9 @@ export function webSearchTool(search: CodexWebSearch, question: string): Tool {
 /**
  * 构造挂给模型的 opencode 工具：把模型给的任务交给只读的 OpenCodeAgent 在仓库里执行。
  * @param agent OpenCode 客户端。
+ * @param context 可选的懒加载上下文（文本类文件内容）；仅在工具被真正调用时求值，与任务一并交给 OpenCode。
  */
-export function openCodeTool(agent: OpenCodeAgent): Tool {
+export function openCodeTool(agent: OpenCodeAgent, context?: () => Promise<string>): Tool {
   return {
     definition: {
       type: "function",
@@ -249,13 +258,21 @@ export function openCodeTool(agent: OpenCodeAgent): Tool {
       // 参数来自模型，需做类型检查；空 prompt 返回错误文本给模型自行修正。
       const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
       if (!prompt) return "prompt 不能为空";
-      return agent.run(prompt);
+      // 只在工具真的被调用时才取文件上下文（用到才下载）。
+      const extra = context ? (await context()).trim() : "";
+      if (extra) logger.info(`[opencode] 注入文件上下文 ${extra.length} 字符`);
+      return agent.run(extra ? `${extra}\n\n${prompt}` : prompt);
     },
   };
 }
 
 /** generateReply 可用的后端：搜索与只读 OpenCode，均为可选。 */
-export type ReplyTools = { search?: CodexWebSearch; opencode?: OpenCodeAgent };
+export type ReplyTools = {
+  search?: CodexWebSearch;
+  opencode?: OpenCodeAgent;
+  // opencode 被调用时注入的上下文（文本类文件内容）；缺省表示没有相关文件。
+  opencodeContext?: () => Promise<string>;
+};
 
 /**
  * 生成回复：拼 system + 聊天记录交给 deepseek（可能带工具循环），再解析成片段。
@@ -268,7 +285,7 @@ export async function generateReply(ctx: ReplyContext, backends: ReplyTools): Pr
   const question = [...ctx.pending].map((record) => `${record.name}：${record.text}`).join("\n");
   const tools: Tool[] = [];
   if (backends.search) tools.push(webSearchTool(backends.search, question));
-  if (backends.opencode) tools.push(openCodeTool(backends.opencode));
+  if (backends.opencode) tools.push(openCodeTool(backends.opencode, backends.opencodeContext));
   const toolNames = tools.map((tool) => tool.definition.function.name);
   const messages: ChatMessage[] = [
     { role: "system", content: buildSystemPrompt(ctx, toolNames) },

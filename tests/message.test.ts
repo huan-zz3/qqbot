@@ -149,3 +149,18 @@ test("markdown links and images render as plain text", () => {
   assert.equal(markdownToText("[@OvO](mqqapi://markdown/mention?at_type=1&at_tiny_id=1) 你好"), "@OvO 你好");
   assert.equal(markdownToText("看 ![star #20px](https://x/s.png) 和 [完整榜单](https://github.com/trending)"), "看 [图片] 和 完整榜单");
 });
+
+// 文件段：有文件名和大小 → [文件：名（大小）]；只有名字 → 不带大小；连名字都没有 → 兜底 [文件]。
+// 大小按 B/KB/MB 人类可读化（formatSize 纯函数），且非正数/非数字不渲染大小。
+test("file segments render name and size", () => {
+  const segments = toSegments([
+    { type: "file", data: { file: "报告.txt", file_size: 2048 } },
+    { type: "file", data: { file: "log.txt", file_size: 512 } },
+    { type: "file", data: { file: "无大小.txt" } },
+    { type: "file", data: {} },
+  ]);
+  assert.equal(
+    renderSegments(segments, ctx),
+    "[文件：报告.txt（2.0KB）][文件：log.txt（512B）][文件：无大小.txt][文件]",
+  );
+});

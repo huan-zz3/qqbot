@@ -13,6 +13,7 @@ import { isAbsolute } from "node:path";
 
 import { config } from "./config.js";
 import { ChatRuntime } from "./chat/runtime.js";
+import { FileStore, type CallAction } from "./chat/files.js";
 import { ImageDescriber, describeImageWith } from "./chat/images.js";
 import { MemoryStore } from "./chat/memory.js";
 import { PowerSwitch } from "./chat/power.js";
@@ -94,7 +95,7 @@ async function main(): Promise<void> {
   const groups = [...config.bot.groups].join(",") || "（无）";
   const privateUsers = [...config.bot.privateUsers].join(",") || "（无）";
   logger.info(
-    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   // runtime/moderation 先声明再赋值：构造 client 时的事件回调闭包会引用它们。
@@ -110,7 +111,12 @@ async function main(): Promise<void> {
     runtime?.handle(event);
     moderation?.handle(event);
   });
-  runtime = new ChatRuntime({ client, judge, search, opencode, stickers, images, memory, power, handoff });
+  // 聊天文件读取：注入 callAction（需绑定 this）与上限；FILES_ENABLED 关闭时为 undefined，完全保持原有行为。
+  const callAction: CallAction = (action, params) => client.callAction(action, params);
+  const files = config.files.enabled
+    ? new FileStore(callAction, config.files.maxBytes, config.files.maxChars)
+    : undefined;
+  runtime = new ChatRuntime({ client, judge, search, opencode, stickers, images, files, memory, power, handoff });
   // 群管理依赖 jev；启用了却没有 jev 时明确告警，而不是静默失效。
   if (config.moderation.enabled) {
     if (judge) moderation = new Moderation({ client, judge, power, handoff });

@@ -11,6 +11,7 @@
  * 因此 since(mark) 能识别标记早于当前窗口的情况；botMessageIds 用于判断
  * 某条引用/回复目标是否由 bot 自己发出。
  */
+import type { FileRef } from "./files.js";
 
 /** 会话类型：群聊或私聊；长期记忆按此分区。 */
 export type Scope = "group" | "private";
@@ -47,6 +48,8 @@ export type ChatRecord = {
   mentionNames?: string[];
   // 本条消息所回复的消息快照。
   quote?: Quote;
+  // 本条消息携带的文件（群/私聊文件段）；供 opencode 调用时懒加载文本内容。
+  files?: FileRef[];
   // 表情包描述、@ 展示名、引用内容全部补齐后 resolve。
   ready?: Promise<void>;
 };

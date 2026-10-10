@@ -167,6 +167,17 @@ export const config = {
     // 随提示词给模型的候选表情数量（打乱顺序，避免越用越偏向某几张）。
     promptLimit: num("STICKERS_PROMPT_LIMIT", 40),
   },
+  // 聊天里发来的文件：文本类文件可随 opencode 调用一并交给模型分析。
+  // 只处理聊天中收到的文件；不做群文件列表，也不支持非文本（图片/压缩包/音视频/Office 等）。
+  files: {
+    enabled: bool("FILES_ENABLED", true),
+    // 单个文件下载上限（字节），超出即判失败，不截断二进制。
+    maxBytes: num("FILES_MAX_BYTES", 5 * 1024 * 1024),
+    // 单个文件注入 opencode 的字符上限，超出截断（截断事实会写进上下文与日志）。
+    maxChars: num("FILES_MAX_CHARS", 20000),
+    // 单次 opencode 调用最多注入的文件数（按新→旧选取）。
+    maxFiles: num("FILES_MAX_FILES", 3),
+  },
   // 普通图片识图（不保存图片，只缓存描述）。
   images: {
     enabled: bool("IMAGES_ENABLED", true),

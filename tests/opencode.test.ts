@@ -88,3 +88,37 @@ test("opencode tool trims and forwards the prompt", async () => {
   assert.equal(await tool.handler({ prompt: "  看看 README  " }), "结果");
   assert.deepEqual(agent.calls, ["看看 README"]);
 });
+
+// 带文件上下文时：先求值上下文，把内容前置拼在 prompt 之前一并交给后端。
+test("opencode tool prepends the file context when provided", async () => {
+  const agent = fakeAgent();
+  let calls = 0;
+  const tool = openCodeTool(agent as never, async () => {
+    calls++;
+    return "  【文件：a.txt】\n内容  ";
+  });
+  assert.equal(await tool.handler({ prompt: "总结一下" }), "结果");
+  assert.equal(calls, 1);
+  assert.deepEqual(agent.calls, ["【文件：a.txt】\n内容\n\n总结一下"]);
+});
+
+// 上下文为空（无相关文件）时行为与不传上下文一致：只转发 prompt。
+test("opencode tool ignores an empty context", async () => {
+  const agent = fakeAgent();
+  const tool = openCodeTool(agent as never, async () => "   ");
+  assert.equal(await tool.handler({ prompt: "看看代码" }), "结果");
+  assert.deepEqual(agent.calls, ["看看代码"]);
+});
+
+// prompt 为空时不求值上下文、也不调用后端（避免无谓的文件下载）。
+test("opencode tool does not evaluate context for an empty prompt", async () => {
+  const agent = fakeAgent();
+  let calls = 0;
+  const tool = openCodeTool(agent as never, async () => {
+    calls++;
+    return "内容";
+  });
+  assert.equal(await tool.handler({}), "prompt 不能为空");
+  assert.equal(calls, 0);
+  assert.deepEqual(agent.calls, []);
+});
