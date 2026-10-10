@@ -1,7 +1,12 @@
-import { TypeSafeClient, noul, type EntryType, type JsonValue, type Questions } from "@typesafe-ai/sdk";
+import { noul, type EntryType, type JsonValue, type Questions } from "@typesafe-ai/sdk";
 
 import { config } from "../config.js";
+import { createJevJudge, type Judge } from "../jev/judge.js";
 import { relation, type ChatRecord, type Presence, type Scope } from "./history.js";
+
+// Judge moved to a neutral module so moderation can share it; re-exported for existing importers.
+export { createJevJudge };
+export type { Judge };
 
 export type GateContext = {
   scope: Scope;
@@ -30,26 +35,6 @@ export type GateDecision = {
   source: "rule" | "jev" | "fallback";
   scores?: GateScores;
 };
-
-// Answers are yes-probabilities keyed by question name.
-export type Judge = (state: EntryType, questions: Questions) => Promise<Record<string, number>>;
-
-export function createJevJudge(): Judge {
-  const client = new TypeSafeClient({
-    apiKey: config.jev.apiKey,
-    defaultModel: config.jev.model,
-    timeout: config.jev.timeoutMs,
-    retry: { maxRetries: 1 },
-  });
-  return async (state, questions) => {
-    const result = await client.systemOne({ state, questions });
-    const probabilities: Record<string, number> = {};
-    for (const [name, answer] of Object.entries(result.answers)) {
-      if (answer.type === "noul") probabilities[name] = answer.noul;
-    }
-    return probabilities;
-  };
-}
 
 function relativeTime(time: number, now: number): string {
   const seconds = Math.max(0, Math.round((now - time) / 1000));

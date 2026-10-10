@@ -166,6 +166,31 @@ deploy/sync-codex-auth.sh user@your-server
 
 `data/` 里有群友的个人信息和表情包，不要提交或公开。
 
+## 群管理模块（可选）
+
+独立的群管理，不需要任何指令：机器人自己看群消息，把每条消息连同它前面 `MODERATION_CONTEXT_MESSAGES` 条上下文一起交给 jev，一次问三个问题（撤回 / 禁言 / 回复）。三个操作**各自独立触发、无优先级**：只要某项分数达到自己的阈值就执行该项，一条消息可同时命中多项（执行顺序为 撤回 → 禁言 → 回复），每项各自 @ 对方发一条固定文本：
+
+- 撤回：先 `delete_msg`，再 @ 对方发 `MODERATION_RECALL_TEXT`；
+- 禁言：先 `set_group_ban` 对方 `MODERATION_BAN_SECONDS` 秒，再 @ 对方发 `MODERATION_BAN_TEXT`；
+- 回复：只 @ 对方发 `MODERATION_REPLY_TEXT`。
+
+它和普通聊天互不影响（被处理的消息仍会进入聊天流程）。某一项的 `MODERATION_*_PROMPT` 留空即不启用该项；三项全空则不判断。
+
+前提：
+
+- `MODERATION_ENABLED=true`，并把要管理的群号填进 `MODERATION_GROUPS`；
+- **机器人本身必须是该群的群主或管理员**，否则日志会报错并跳过：首次见到某群时用 `get_group_member_info` 确认自己的身份并缓存，遇到 `retcode 1401` 时下次重查；
+- 撤回受 QQ 时限与 NapCat 缓存限制，过期或未缓存的消息可能撤回失败，此时不会发出固定文本（不谎报已处理）。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `MODERATION_ENABLED` | false | 是否启用群管理 |
+| `MODERATION_GROUPS` | | 启用的群号，逗号分隔 |
+| `MODERATION_CONTEXT_MESSAGES` | 5 | 判断一条消息时附带的前置消息条数 |
+| `MODERATION_RECALL_PROMPT` / `_THRESHOLD` / `_TEXT` | / 0.85 / | 撤回问题的提示词、阈值、固定回复文本 |
+| `MODERATION_BAN_PROMPT` / `_THRESHOLD` / `_TEXT` / `_SECONDS` | / 0.9 / / 600 | 禁言的提示词、阈值、固定回复文本、时长（秒） |
+| `MODERATION_REPLY_PROMPT` / `_THRESHOLD` / `_TEXT` | / 0.8 / | 回复的提示词、阈值、固定回复文本 |
+
 ## 项目结构
 
 ```text
@@ -182,6 +207,9 @@ src/
 │   ├── media.ts          图片下载、格式识别、描述清理
 │   ├── memory.ts         长期记忆
 │   └── history.ts        会话消息记录
+├── moderation/
+│   └── moderation.ts     群管理：jev 三问（撤回/禁言/回复）
+├── jev/judge.ts          jev 判定客户端（聊天与群管理共用）
 ├── llm/deepseek.ts       deepseek-flash：工具循环、识图、JSON（失败重试一次）
 ├── search/               Codex access token 读取、web_search
 └── cli/learn-history.ts  从历史记录补学记忆

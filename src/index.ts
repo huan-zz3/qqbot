@@ -1,12 +1,13 @@
 import { config } from "./config.js";
-import { createJevJudge } from "./chat/gate.js";
 import { ChatRuntime } from "./chat/runtime.js";
 import { ImageDescriber, describeImageWith } from "./chat/images.js";
 import { MemoryStore } from "./chat/memory.js";
 import { PowerSwitch } from "./chat/power.js";
 import { StickerStore, describeSticker } from "./chat/stickers.js";
+import { createJevJudge } from "./jev/judge.js";
 import { DEEPSEEK_MODEL, completeJson, describeImage } from "./llm/deepseek.js";
 import { logger } from "./logger.js";
+import { Moderation } from "./moderation/moderation.js";
 import { NapcatClient } from "./napcat/client.js";
 import { isMessageEvent } from "./napcat/types.js";
 import { CodexAuth } from "./search/codex-auth.js";
@@ -52,10 +53,17 @@ async function main(): Promise<void> {
   );
 
   let runtime: ChatRuntime | undefined;
+  let moderation: Moderation | undefined;
   const client = new NapcatClient((event) => {
-    if (isMessageEvent(event)) runtime?.handle(event);
+    if (!isMessageEvent(event)) return;
+    runtime?.handle(event);
+    moderation?.handle(event);
   });
   runtime = new ChatRuntime({ client, judge, search, stickers, images, memory, power });
+  if (config.moderation.enabled) {
+    if (judge) moderation = new Moderation({ client, judge, power });
+    else logger.warn("启用了群管理（MODERATION_ENABLED）但没有 jev，群管理不生效");
+  }
   client.connect();
 
   const shutdown = async () => {

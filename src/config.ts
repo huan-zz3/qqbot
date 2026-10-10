@@ -124,6 +124,28 @@ export const config = {
     maxChars: num("REPLY_MAX_CHARS", 1500),
     maxParts: num("REPLY_MAX_PARTS", 40),
   },
+  moderation: {
+    enabled: bool("MODERATION_ENABLED", false),
+    groups: idSet("MODERATION_GROUPS"),
+    // Preceding group messages given to jev as context for judging a new message.
+    contextMessages: num("MODERATION_CONTEXT_MESSAGES", 5),
+    reply: {
+      prompt: str("MODERATION_REPLY_PROMPT"),
+      threshold: num("MODERATION_REPLY_THRESHOLD", 0.8),
+      text: str("MODERATION_REPLY_TEXT"),
+    },
+    recall: {
+      prompt: str("MODERATION_RECALL_PROMPT"),
+      threshold: num("MODERATION_RECALL_THRESHOLD", 0.85),
+      text: str("MODERATION_RECALL_TEXT"),
+    },
+    ban: {
+      prompt: str("MODERATION_BAN_PROMPT"),
+      threshold: num("MODERATION_BAN_THRESHOLD", 0.9),
+      text: str("MODERATION_BAN_TEXT"),
+      seconds: num("MODERATION_BAN_SECONDS", 600),
+    },
+  },
 };
 
 export type Config = typeof config;

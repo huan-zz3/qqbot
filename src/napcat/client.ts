@@ -110,6 +110,17 @@ export class NapcatClient {
     );
   }
 
+  // Recall a message; QQ may reject it after its time limit.
+  deleteMsg(messageId: number): Promise<void> {
+    return this.callAction("delete_msg", { message_id: messageId }).then(() => undefined);
+  }
+
+  setGroupBan(groupId: number, userId: number, durationSeconds: number): Promise<void> {
+    return this.callAction("set_group_ban", { group_id: groupId, user_id: userId, duration: durationSeconds }).then(
+      () => undefined,
+    );
+  }
+
   // Sends are serialized with a minimum gap so bursts of reply parts do not trip QQ risk control.
   private enqueue(send: () => Promise<ActionResponse<{ message_id: number }>>): Promise<number | undefined> {
     const task = this.sendChain.then(async () => {
@@ -148,7 +159,10 @@ export class NapcatClient {
       const response = payload as unknown as ActionResponse;
       if (response.status === "failed" || (typeof response.retcode === "number" && response.retcode !== 0)) {
         const detail = response.wording || response.message || response.msg || `retcode=${response.retcode}`;
-        pending.reject(new Error(`action ${pending.action} 失败: ${detail}`));
+        const error = new Error(`action ${pending.action} 失败: ${detail}`);
+        // Callers tell recoverable cases (e.g. 1401) apart by retcode.
+        Object.assign(error, { retcode: response.retcode });
+        pending.reject(error);
       } else {
         pending.resolve(response);
       }
