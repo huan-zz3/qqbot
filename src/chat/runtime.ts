@@ -14,12 +14,14 @@
  * 由 index.ts 组装注入，除 client 外都可能是 undefined（对应功能停用）。
  *
  * 约束/坑：
+ * - 一批消息里若有被群管理（moderation）处理过的消息，整批跳过 AI 回复（deps.handoff）；消息仍进历史。
  * - 图片描述、引用消息、@ 群名片是异步补全的，通过 ChatRecord.ready 汇总，process 最多等 MEDIA_WAIT_MS。
  * - 定时器回调统一写作 `void this.xxx()`；async 方法内部自行 catch，避免未处理的 Promise 拒绝。
  * - 群聊只响应 BOT_GROUPS、私聊只响应 BOT_PRIVATE_USERS 白名单；停机时完全不参与。
  */
 import { config } from "../config.js";
 import { logger } from "../logger.js";
+import type { ModerationHandoff } from "../moderation/handoff.js";
 import type { NapcatClient, SendTarget } from "../napcat/client.js";
 import {
   atTargets,
@@ -74,6 +76,8 @@ export type RuntimeDeps = {
   images?: ImageDescriber | undefined; // 普通图片识图
   memory: MemoryStore | undefined; // 长期记忆
   power?: PowerSwitch | undefined; // 管理员 /启动 /停止 开关
+  // 群管理处理过的消息信号；一批里若有命中者则跳过整批 AI 回复。群管理未启用该项时为 undefined。
+  handoff?: ModerationHandoff | undefined;
 };
 
 // 管理员私聊指令 → 目标开关状态。
@@ -361,6 +365,11 @@ export class ChatRuntime {
     const pending = session.pending.splice(0);
     session.firstPendingAt = undefined;
     try {
+      // 本批若已有消息被群管理处理，整批跳过 AI 回复（群管理优先）；消息仍留在历史里供后续上下文。
+      if (pending.some((record) => record.messageId !== undefined && this.deps.handoff?.handled(record.messageId))) {
+        logger.info(`[chat] ${session.key} 本批已被群管理处理，跳过 AI 回复 :: ${summarize(pending)}`);
+        return; // finally 里仍会重置 busy 并重新 schedule
+      }
       // 等识图/引用/名片补全，最多 MEDIA_WAIT_MS；超时就用已就绪的部分继续。
       await Promise.race([Promise.all(pending.map((record) => record.ready)), sleep(MEDIA_WAIT_MS)]);
       const now = Date.now();

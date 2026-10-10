@@ -20,6 +20,7 @@ import { StickerStore, describeSticker } from "./chat/stickers.js";
 import { createJevJudge } from "./jev/judge.js";
 import { DEEPSEEK_MODEL, completeJson, describeImage } from "./llm/deepseek.js";
 import { logger } from "./logger.js";
+import { ModerationHandoff } from "./moderation/handoff.js";
 import { Moderation } from "./moderation/moderation.js";
 import { NapcatClient } from "./napcat/client.js";
 import { isMessageEvent } from "./napcat/types.js";
@@ -99,17 +100,20 @@ async function main(): Promise<void> {
   // runtime/moderation 先声明再赋值：构造 client 时的事件回调闭包会引用它们。
   let runtime: ChatRuntime | undefined;
   let moderation: Moderation | undefined;
+  // 群管理命中后跳过 AI 回复的共享信号；未启用群管理、关了开关或没有 jev 时为 undefined。
+  const handoff =
+    judge && config.moderation.enabled && config.moderation.skipReply ? new ModerationHandoff() : undefined;
   const client = new NapcatClient((event) => {
     // 非消息事件（心跳、通知等）不处理。
     if (!isMessageEvent(event)) return;
-    // 同一条消息既进聊天流程也进群管理流程，两者互不影响。
+    // 同一条消息既进聊天流程也进群管理流程；群管理命中会通过 handoff 让聊天跳过该批回复。
     runtime?.handle(event);
     moderation?.handle(event);
   });
-  runtime = new ChatRuntime({ client, judge, search, opencode, stickers, images, memory, power });
+  runtime = new ChatRuntime({ client, judge, search, opencode, stickers, images, memory, power, handoff });
   // 群管理依赖 jev；启用了却没有 jev 时明确告警，而不是静默失效。
   if (config.moderation.enabled) {
-    if (judge) moderation = new Moderation({ client, judge, power });
+    if (judge) moderation = new Moderation({ client, judge, power, handoff });
     else logger.warn("启用了群管理（MODERATION_ENABLED）但没有 jev，群管理不生效");
   }
   client.connect();

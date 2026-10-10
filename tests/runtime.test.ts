@@ -410,3 +410,37 @@ test("replying to the bot while @-ing someone else is addressed to that person",
   assert.equal(seen[1]!.replies_to_bot, true);
   assert.equal(seen[1]!.quoting, "小猫的「嗯嗯」");
 });
+
+// 群管理优先：本批里若有消息被群管理处理过（handoff.handled 命中），整批跳过 AI 回复——
+// jev 与模型都不调用，也不发送任何消息。
+test("a batch with a moderation-handled message skips the AI reply", async () => {
+  let judged = 0;
+  const { runtime, sent, prompts } = setup(async () => {
+    judged++;
+    return { should_reply: 0.9, addressed: 0.9 };
+  }, ["不该发"]);
+  const handled = new Set<number>();
+  (runtime as unknown as { deps: { handoff: unknown } }).deps.handoff = {
+    handled: (id: number) => handled.has(id),
+    mark: () => undefined,
+  };
+  const msg = groupMessage("广告消息");
+  handled.add(msg.message_id); // 模拟该消息已被群管理命中
+  runtime.handle(msg);
+  await wait(200);
+  assert.equal(judged, 0);
+  assert.equal(sent.length, 0);
+  assert.equal(prompts.length, 0);
+});
+
+// 对照组：装了 handoff 但没有命中（handled 恒 false）时，回复流程照常进行。
+test("a batch with no moderation hit replies as usual", async () => {
+  const { runtime, sent } = setup(async () => ({ should_reply: 0.9, addressed: 0.9 }), ["在的"]);
+  (runtime as unknown as { deps: { handoff: unknown } }).deps.handoff = {
+    handled: () => false,
+    mark: () => undefined,
+  };
+  runtime.handle(groupMessage("在吗"));
+  await wait(200);
+  assert.equal(sent.length, 1);
+});

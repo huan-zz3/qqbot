@@ -270,3 +270,40 @@ test("bot role gates moderation: member does nothing, admin proceeds", async () 
   assert.equal(admin.sent.length, 1);
   assert.equal(admin.actions.filter((item) => item.action === "delete_msg").length, 1);
 });
+
+// handoff：命中任一操作即用该消息的 message_id 标记，供聊天运行时跳过对应批次的 AI 回复。
+test("a triggered op marks the message id via handoff", async () => {
+  const marked: number[] = [];
+  const handoff = { mark: (id: number) => marked.push(id), handled: () => false };
+  const { client } = setup();
+  const judge = async () => ({ recall: 0.9, ban: 0.1, reply: 0.1 });
+  const moderation = new Moderation({ ...deps(client, judge), handoff });
+  const msg = groupMessage("广告消息");
+  moderation.handle(msg);
+  await wait(50);
+  assert.deepEqual(marked, [msg.message_id]);
+});
+
+// handoff：三项都没命中（分数全低于阈值）时不标记，聊天照常走 AI 回复。
+test("no triggered op leaves the message unmarked", async () => {
+  const marked: number[] = [];
+  const handoff = { mark: (id: number) => marked.push(id), handled: () => false };
+  const { client } = setup();
+  const judge = async () => ({ recall: 0.1, ban: 0.1, reply: 0.1 });
+  const moderation = new Moderation({ ...deps(client, judge), handoff });
+  moderation.handle(groupMessage("普通消息"));
+  await wait(50);
+  assert.deepEqual(marked, []);
+});
+
+// handoff：电源开关关闭时不判断也不标记。
+test("power off does not mark the message", async () => {
+  const marked: number[] = [];
+  const handoff = { mark: (id: number) => marked.push(id), handled: () => false };
+  const { client } = setup();
+  const judge = async () => ({ recall: 0.9 });
+  const moderation = new Moderation({ ...deps(client, judge, false), handoff });
+  moderation.handle(groupMessage("广告消息"));
+  await wait(50);
+  assert.deepEqual(marked, []);
+});

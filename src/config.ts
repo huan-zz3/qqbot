@@ -204,6 +204,8 @@ export const config = {
   moderation: {
     enabled: bool("MODERATION_ENABLED", false),
     groups: idSet("MODERATION_GROUPS"),
+    // 群管理命中后是否跳过同一批消息的 AI 回复阶段；默认开启。
+    skipReply: bool("MODERATION_SKIP_REPLY", true),
     // 判断一条消息时附带多少条前置群消息当上下文。
     contextMessages: num("MODERATION_CONTEXT_MESSAGES", 5),
     // 回复：达到阈值就 @ 对方发固定文本。

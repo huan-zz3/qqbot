@@ -197,7 +197,7 @@ deploy/sync-codex-auth.sh user@your-server
 - 禁言：先 `set_group_ban` 对方 `MODERATION_BAN_SECONDS` 秒，再 @ 对方发 `MODERATION_BAN_TEXT`；
 - 回复：只 @ 对方发 `MODERATION_REPLY_TEXT`。
 
-它和普通聊天互不影响（被处理的消息仍会进入聊天流程）。某一项的 `MODERATION_*_PROMPT` 留空即不启用该项；三项全空则不判断。
+它和普通聊天共用同一套消息流：群管理**命中**（撤回/禁言/回复任一触发）后，机器人会跳过同一批次消息的 AI 回复，避免一边处罚一边闲聊；**未命中**时消息照常进入聊天流程、正常回复。这个跳过由 `MODERATION_SKIP_REPLY` 控制（默认开启）。某一项的 `MODERATION_*_PROMPT` 留空即不启用该项；三项全空则不判断。
 
 前提：
 
@@ -210,6 +210,7 @@ deploy/sync-codex-auth.sh user@your-server
 | `MODERATION_ENABLED` | false | 是否启用群管理 |
 | `MODERATION_GROUPS` | | 启用的群号，逗号分隔 |
 | `MODERATION_CONTEXT_MESSAGES` | 5 | 判断一条消息时附带的前置消息条数 |
+| `MODERATION_SKIP_REPLY` | true | 群管理命中后是否跳过同一批消息的 AI 回复 |
 | `MODERATION_RECALL_PROMPT` / `_THRESHOLD` / `_TEXT` | / 0.85 / | 撤回问题的提示词、阈值、固定回复文本 |
 | `MODERATION_BAN_PROMPT` / `_THRESHOLD` / `_TEXT` / `_SECONDS` | / 0.9 / / 600 | 禁言的提示词、阈值、固定回复文本、时长（秒） |
 | `MODERATION_REPLY_PROMPT` / `_THRESHOLD` / `_TEXT` | / 0.8 / | 回复的提示词、阈值、固定回复文本 |

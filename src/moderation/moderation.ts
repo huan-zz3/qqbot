@@ -6,7 +6,8 @@
  * 一条消息可同时命中多项，执行顺序为 撤回 → 禁言 → 回复，每项完成后 @ 对方发一条固定文本。
  *
  * 关键约定：
- * - 与普通聊天流程完全独立：被处理的消息仍会进入 chat/ 流程；
+ * - 命中任一操作时标记该消息（handoff），普通聊天流程据此跳过同一批的 AI 回复；
+ *   未命中时该消息仍照常进入 chat/ 流程；
  * - 某项的 MODERATION_*_PROMPT 为空即不启用该项；三项全空则不判断；
  * - 前提是机器人本身为该群群主/管理员：首次用 get_group_member_info 确认并缓存身份，
  *   动作返回 retcode 1401 表示缓存身份过期，丢弃缓存、下条消息重查；
@@ -21,6 +22,7 @@ import { logger } from "../logger.js";
 import type { NapcatClient } from "../napcat/client.js";
 import { renderSegments, textSegment, toSegments } from "../napcat/message.js";
 import type { MessageEvent, Segment } from "../napcat/types.js";
+import type { ModerationHandoff } from "./handoff.js";
 
 /** 三个管理操作名；同时用作 jev 问题名与分数键。 */
 export type OpName = "recall" | "ban" | "reply";
@@ -42,6 +44,8 @@ export type ModerationDeps = {
   client: Pick<NapcatClient, "selfId" | "sendMessage" | "callAction" | "deleteMsg" | "setGroupBan">;
   judge: Judge | undefined;
   power?: { readonly on: boolean };
+  // 命中一条消息后据此标记，聊天运行时查同一对象以跳过对应批次的 AI 回复；未启用该项时为 undefined。
+  handoff?: ModerationHandoff;
 };
 
 /**
@@ -145,6 +149,8 @@ export class Moderation {
     }
     // 各自独立触发，可能多项同时命中。
     const triggered = selectActions(scores, ops);
+    // 命中即视为群管理生效：标记该消息，聊天运行时据此跳过本批 AI 回复。
+    if (triggered.length > 0) this.deps.handoff?.mark(event.message_id);
     // detail 记录每项「分数/阈值」便于调参；hit 记录本消息实际命中的操作。
     const detail = ops.map((op) => `${op.name}=${(scores[op.name] ?? 0).toFixed(2)}/${op.threshold}`).join(" ");
     const hit = triggered.map((op) => op.name).join(",") || "无";
