@@ -23,6 +23,7 @@
 - 看得懂图片：普通图片也用 deepseek-flash 识图，以 `[图片：描述]` 出现在聊天记录里。
 - 连发多条，长了就合并转发：每行一条消息，按打字速度间隔发出；回复长到超过 5 行或 300 字时，正文打包成一条合并转发，不刷屏。
 - 联网搜索：jev 觉得可能需要查资料时给模型挂上 `web_search`，走 Codex（ChatGPT 订阅）的搜索接口，搜不搜由模型决定。
+- 只读问代码（可选）：让模型在固定的代码仓库里检索、阅读并回答问题（`opencode acp`）。权限请求一律拒绝，不能改文件、跑命令。
 - 长期记忆：按人记住聊过的事，群聊和私聊分开记；私聊里说的，到群里它也知道，提不提由它自己判断。
 - @ 显示名字：被 @ 的人显示群名片，不会把 QQ 号念出来；它回复里写的 `@名字` 会发成真正的 @。
 - 分得清谁在对谁说：聊天记录写成 `说话人 → 对象：正文（引用 某人的「原文」）`，对象来自 @、再退到被引用消息的作者；jev 的输入里也有 `to` / `quoting`。回复机器人的消息却在 @ 别人，就是在跟那个人说。
@@ -134,6 +135,17 @@ deploy/sync-codex-auth.sh user@your-server
 
 它只把 access token 同步到服务器的 `data/codex-auth.json`，**不带 refresh token**：bot 从不刷新，所以不会把本机 pi 的 refresh token 顶掉（refresh token 每次刷新都会轮换）。access token 过期后搜索自动停用；本机 pi 刷新过之后再同步一次，bot 下次用时读到新 token，无需重启。
 
+### 5. 只读 OpenCode（可选）
+
+给模型加一个在固定代码仓库里检索、阅读并回答问题的能力，底层是 `opencode acp`（见 [ACP 文档](https://opencode.ai/v2/docs/cli/acp/)）。它是**只读**的：客户端不声明任何文件系统 / 终端能力，且对所有权限请求一律拒绝，因此 OpenCode 无法执行命令或改动文件。
+
+前提：
+
+- 服务器上安装 [OpenCode](https://opencode.ai) 并完成 `opencode auth login`（用它自己的登录态，与本项目的 Codex 凭证无关）；
+- `.env` 里设 `OPENCODE_ENABLED=true` 与 `OPENCODE_CWD=/绝对路径/到/仓库`（非绝对路径或不是已存在的目录时，启动会报错退出，不会静默失效）。
+
+调用与否由模型自己决定；一次任务同步执行，超时会先取消再杀掉子进程。白名单内的群 / 私聊都能触发，结果发在原会话。提示词里给模型的说明可用 `OPENCODE_PROMPT` 自定义，用来框定「什么情况下该调用」。如果父进程设了 HTTP 代理，spawn 子进程时会自动把 `127.0.0.1`/`localhost` 加进 `no_proxy`，避免 OpenCode 的本机内部通信被代理转发而失败。
+
 ## 配置
 
 完整列表见 [`.env.example`](.env.example)，常用的：
@@ -147,6 +159,8 @@ deploy/sync-codex-auth.sh user@your-server
 | `GATE_DIRECT_THRESHOLD` | 0.45 | 被 @ 或被回复时的阈值 |
 | `HISTORY_CONTEXT_MESSAGES` | 40 | 给 jev 和模型看的最近消息条数 |
 | `GATE_SEARCH_THRESHOLD` | 0.1 | `needs_search` 高于它就挂上搜索工具 |
+| `OPENCODE_ENABLED` / `OPENCODE_CWD` | false / | 启用只读 OpenCode；`CWD` 是允许访问的仓库绝对路径 |
+| `OPENCODE_PROMPT` | （内置只读说明） | 提示词里给模型的 opencode 说明，用来框定「什么情况下该调用」 |
 | `GATE_GROUP_DEBOUNCE_MS` | 3000 | 群里等消息停下多久再判断 |
 | `DEEPSEEK_THINKING` | false | deepseek-flash 的思考模式 |
 | `DEEPSEEK_TEMPERATURE` | 1.1 | 回复的采样温度；1.3 会冒出奇怪的外文标点和单词 |
@@ -214,6 +228,7 @@ src/
 ├── jev/judge.ts          jev 判定客户端（聊天与群管理共用）
 ├── llm/deepseek.ts       deepseek-flash：工具循环、识图、JSON（失败重试一次）
 ├── search/               Codex access token 读取、web_search
+├── opencode/             只读 OpenCode（ACP）：进程编排、权限裁决
 └── cli/learn-history.ts  从历史记录补学记忆
 ```
 
@@ -230,6 +245,7 @@ pnpm typecheck
 - NapCat 属于非官方客户端，QQ 账号有被风控的风险，建议用小号。
 - `codex/alpha/search` 是 Codex 源码里的内部 alpha 接口，不是公开 API，协议随时可能变。
 - 记忆和表情包描述会把群友的发言交给 DeepSeek 处理，请在群里告知大家。
+- 启用只读 OpenCode 后，白名单群 / 私聊里的消息都可能驱动它读取 `OPENCODE_CWD` 仓库内容并转发到会话里；只读约束挡的是改动与执行，挡不住信息外泄，请自行评估仓库敏感度。
 
 ## 致谢
 

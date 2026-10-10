@@ -2,12 +2,15 @@
  * index.ts —— 进程入口：装配依赖、接线事件、处理退出
  *
  * 流程：校验必需配置（缺 DeepSeek key 直接退出）→ 按配置创建各组件（jev 判定、
- * Codex 搜索、表情包、图片识图、记忆、电源开关）→ 建 WS 客户端，把消息事件
+ * Codex 搜索、只读 OpenCode、表情包、图片识图、记忆、电源开关）→ 建 WS 客户端，把消息事件
  * 分发给聊天运行时与群管理 → 注册 SIGINT/SIGTERM 优雅退出（先落盘再断开）。
  *
  * 组件按需创建：配置关闭或初始化失败时对应依赖为 undefined，各模块自行降级
  * （例如无 jev 时 gate 走兜底判定、搜索不可用时不给模型挂 web_search 工具）。
  */
+import { statSync } from "node:fs";
+import { isAbsolute } from "node:path";
+
 import { config } from "./config.js";
 import { ChatRuntime } from "./chat/runtime.js";
 import { ImageDescriber, describeImageWith } from "./chat/images.js";
@@ -20,6 +23,7 @@ import { logger } from "./logger.js";
 import { Moderation } from "./moderation/moderation.js";
 import { NapcatClient } from "./napcat/client.js";
 import { isMessageEvent } from "./napcat/types.js";
+import { OpenCodeAgent } from "./opencode/agent.js";
 import { installProxy } from "./proxy.js";
 import { CodexAuth } from "./search/codex-auth.js";
 import { CodexWebSearch } from "./search/web-search.js";
@@ -47,6 +51,23 @@ async function main(): Promise<void> {
     await auth.get().catch((error: Error) => logger.warn(`联网搜索暂不可用：${error.message}`));
   }
 
+  // 只读 OpenCode（ACP）：显式启用但 cwd 不合法时直接退出，绝不静默不挂工具。
+  let opencode: OpenCodeAgent | undefined;
+  if (config.opencode.enabled) {
+    const cwd = config.opencode.cwd;
+    if (!isAbsolute(cwd) || !isDirectory(cwd)) {
+      logger.error(`OPENCODE_ENABLED=true 但 OPENCODE_CWD 不是存在的目录：${cwd || "（空）"}`);
+      process.exit(1);
+    }
+    opencode = new OpenCodeAgent({
+      command: config.opencode.command,
+      args: config.opencode.args,
+      cwd,
+      timeoutMs: config.opencode.timeoutMs,
+      maxOutputChars: config.opencode.maxOutputChars,
+    });
+  }
+
   // 表情包库：从磁盘加载已收藏的表情与描述（写描述用 deepseek 识图）。
   let stickers: StickerStore | undefined;
   if (config.stickers.enabled) {
@@ -72,7 +93,7 @@ async function main(): Promise<void> {
   const groups = [...config.bot.groups].join(",") || "（无）";
   const privateUsers = [...config.bot.privateUsers].join(",") || "（无）";
   logger.info(
-    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   // runtime/moderation 先声明再赋值：构造 client 时的事件回调闭包会引用它们。
@@ -85,7 +106,7 @@ async function main(): Promise<void> {
     runtime?.handle(event);
     moderation?.handle(event);
   });
-  runtime = new ChatRuntime({ client, judge, search, stickers, images, memory, power });
+  runtime = new ChatRuntime({ client, judge, search, opencode, stickers, images, memory, power });
   // 群管理依赖 jev；启用了却没有 jev 时明确告警，而不是静默失效。
   if (config.moderation.enabled) {
     if (judge) moderation = new Moderation({ client, judge, power });
@@ -96,6 +117,7 @@ async function main(): Promise<void> {
   // 优雅退出：先把表情包与记忆落盘（失败也继续），再断开连接退出。
   const shutdown = async () => {
     logger.info("退出中…");
+    opencode?.dispose();
     await stickers?.flush().catch(() => undefined);
     await memory?.flush().catch(() => undefined);
     await client.shutdown();
@@ -107,3 +129,12 @@ async function main(): Promise<void> {
 
 // 启动入口。
 void main();
+
+/** cwd 是否是一个已存在的目录（用于校验 OPENCODE_CWD）。 */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}

@@ -74,11 +74,11 @@ test("system prompt lists stickers without prescribing style", () => {
     memories: ["李四：私聊里告诉你的：在北京工作"],
     now: Date.now(),
   };
-  const prompt = buildSystemPrompt(ctx, true);
+  const prompt = buildSystemPrompt(ctx, ["web_search"]);
   assert.match(prompt, /#3 猫猫叹气/);
   assert.match(prompt, /web_search/);
   assert.match(prompt, /- 李四：私聊里告诉你的：在北京工作/);
-  assert.doesNotMatch(buildSystemPrompt({ ...ctx, stickers: [], memories: [] }, false), /表情包#|web_search|记得/);
+  assert.doesNotMatch(buildSystemPrompt({ ...ctx, stickers: [], memories: [] }, []), /表情包#|web_search|opencode|记得/);
 });
 
 // 搜索结果清理：去掉 \ue200cite\ue202turn0search0\ue201 这类 Codex 引用标记、

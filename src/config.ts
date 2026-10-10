@@ -56,6 +56,13 @@ function idSet(name: string): Set<number> {
 // BOT_PERSONA 未配置时的默认人设。
 const DEFAULT_PERSONA = "是群里的一个 AI 群友。";
 
+// OPENCODE_PROMPT 未配置时给模型的 opencode 工具说明；只交代事实，不诱导使用。
+const DEFAULT_OPENCODE_PROMPT =
+  "你可以用 opencode 工具在某个代码仓库里检索、阅读代码并回答相关问题；它只能读，不能修改任何文件。";
+
+// OPENCODE_ARGS 未配置时，默认以 `acp` 子命令启动（JSON-RPC over stdio 的 agent）。
+const opencodeArgs = list("OPENCODE_ARGS");
+
 export const config = {
   // 日志级别：debug/info/warn/error/silent。
   logLevel: str("LOG_LEVEL", "info"),
@@ -134,6 +141,22 @@ export const config = {
     contextSize: str("CODEX_SEARCH_CONTEXT_SIZE", "medium"),
     maxOutputTokens: num("CODEX_SEARCH_MAX_OUTPUT_TOKENS", 3000),
     timeoutMs: num("CODEX_SEARCH_TIMEOUT_MS", 60000),
+  },
+  // 基础能力：让模型在固定仓库里只读地调用 OpenCode（ACP，见 src/opencode/agent.ts）。
+  // 需要机器上已安装 opencode 并完成 `opencode auth login`；权限请求一律拒绝，因此只能读不能改。
+  opencode: {
+    enabled: bool("OPENCODE_ENABLED", false),
+    command: str("OPENCODE_COMMAND", "opencode"),
+    // 启动参数；未配置时默认 ["acp"]。
+    args: opencodeArgs.length > 0 ? opencodeArgs : ["acp"],
+    // 提示词里给模型的 opencode 说明，用来框定「什么情况下该调用」；留空则用默认事实说明。
+    prompt: str("OPENCODE_PROMPT", DEFAULT_OPENCODE_PROMPT),
+    // 固定仓库的绝对路径；为空则视为未配置（启用时会启动失败）。
+    cwd: str("OPENCODE_CWD"),
+    // 单次任务的总超时；超时会取消任务并杀掉子进程。
+    timeoutMs: num("OPENCODE_TIMEOUT_MS", 180000),
+    // 返回文本的截断上限，避免把超长输出整段塞给模型。
+    maxOutputChars: num("OPENCODE_MAX_OUTPUT_CHARS", 4000),
   },
   // 表情包收藏与识图描述。
   stickers: {

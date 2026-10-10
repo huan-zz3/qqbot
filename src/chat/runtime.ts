@@ -33,6 +33,7 @@ import {
   toSegments,
 } from "../napcat/message.js";
 import type { MessageEvent, Segment } from "../napcat/types.js";
+import type { OpenCodeAgent } from "../opencode/agent.js";
 import type { CodexWebSearch } from "../search/web-search.js";
 import { decide, type GateDecision, type Judge } from "./gate.js";
 import { SessionHistory, formatLine, type ChatRecord, type Quote, type Scope } from "./history.js";
@@ -68,6 +69,7 @@ export type RuntimeDeps = {
   client: Pick<NapcatClient, "selfId" | "sendMessage" | "sendForward" | "callAction">; // NapCat 客户端能力集
   judge: Judge | undefined; // jev 判定器；未配置 TYPESAFE_API_KEY 时为 undefined
   search: CodexWebSearch | undefined; // Codex 联网搜索
+  opencode: OpenCodeAgent | undefined; // 只读 OpenCode（ACP）能力
   stickers: StickerStore | undefined; // 表情包收藏
   images?: ImageDescriber | undefined; // 普通图片识图
   memory: MemoryStore | undefined; // 长期记忆
@@ -403,7 +405,7 @@ export class ChatRuntime {
     pending: Set<ChatRecord>,
     withSearch: boolean,
   ): Promise<void> {
-    // gate 建议搜索且 Codex 凭证当前可用时，才把 web_search 工具挂给模型。
+    // gate 建议搜索且 Codex 凭证当前可用时，才把 web_search 工具挂给模型；OpenCode 组件存在即挂载。
     const search = withSearch && (await this.deps.search?.usable()) ? this.deps.search : undefined;
     const generated = await generateReply(
       {
@@ -417,7 +419,7 @@ export class ChatRuntime {
         memories: this.deps.memory?.describe(records) ?? [],
         now: Date.now(),
       },
-      search,
+      { search, opencode: this.deps.opencode },
     );
     // 机器人最近发过的文本，用来检查是否在复读同一个结尾。
     const recentBot = records.filter((record) => record.fromBot).map((record) => record.text);
