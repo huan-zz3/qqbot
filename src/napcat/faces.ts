@@ -1,5 +1,17 @@
-// QQ system faces by name, extracted from the QQ NT client's
-// resources/app/resource/default-emojis/default_config.json (小黄脸表情 + 超级表情).
+/**
+ * faces.ts —— QQ 系统表情（小黄脸）名称 ↔ ID 映射表
+ * 来源：QQ NT 客户端 resources/app/resource/default-emojis/default_config.json
+ * （小黄脸表情 + 超级表情）。
+ *
+ * 用途：
+ * - 收消息：face 段的数字 ID 经 faceName() 转成名称，渲染为 [名称] 进入聊天记录；
+ * - 发消息：模型写的 [名称] 经 message.ts 的 facesToSegments 转回 face 段。
+ *
+ * 说明：表按 ID 升序排列，ID 不连续（如 17、45 等缺号），直接沿用客户端原始编号，
+ * 收发两端以数字 ID 对齐；名称与 QQ 客户端一致，含纯中文、英文（doge/emm/NO）与数字（666）。
+ */
+
+/** 表情名称 → 表情 ID；键即聊天里显示的 [名称] 内容。 */
 export const FACE_IDS: Record<string, number> = {
   "惊讶": 0,
   "撇嘴": 1,
@@ -189,8 +201,13 @@ export const FACE_IDS: Record<string, number> = {
   "蛇年快乐": 429,
 };
 
+// 反向索引（ID → 名称），供 faceName() 查询；FACE_IDS 只有名称 → ID 一个方向。
 const FACE_NAMES = new Map(Object.entries(FACE_IDS).map(([name, id]) => [id, name]));
 
+/**
+ * 数字 ID → 表情名称（如 179 → "doge"）。
+ * 未知 ID（新版新增表情、或非系统表情）返回 undefined，调用方回退成 [表情]。
+ */
 export function faceName(id: number): string | undefined {
   return FACE_NAMES.get(id);
 }
