@@ -19,7 +19,7 @@
 - **`config.ts` 在 import 时就把 `process.env` 读进 `config` 常量**（含 `dotenv.config()`）。改 env 必须在 import 之前；测试因此先在顶部 `process.env.X = ...`，再用 `await import("../src/chat/gate.js")` 动态引入被测模块（见 `tests/gate.test.ts`）。`pnpm test` 下 `NODE_TEST_CONTEXT` 被置位，故意不读本地 `.env`。
 - ESM + `NodeNext`：**import 必须带 `.js` 后缀**（`import { config } from "./config.js"`），即使源文件是 `.ts`。
 - 挂了工具时，DeepSeek 要求把前序 assistant 回合的 `reasoning_content` 原样回传，否则 400（`llm/deepseek.ts` 的 `chatWithTools`）。
-- 联网搜索靠外部 MCP 服务器：连接断了或服务器挂了就置为不可用并打日志，不自动重连，重启恢复；工具清单在启动时拉取一次（`search/mcp-search.ts`）。
+- 联网搜索靠外部 MCP 服务器：连接断了或服务器挂了就置为不可用并打日志，之后按指数退避自动重连（首次 `SEARCH_MCP_RECONNECT_MIN_MS`，×2 封顶 `SEARCH_MCP_RECONNECT_MAX_MS`）、成功即恢复，无需重启；工具清单在启动时拉取一次（`search/mcp-search.ts`）。
 - **bot 自身出网靠 undici `ProxyAgent`（`proxy.ts`），只作用于本进程**；spawn 出的 `opencode acp` 是独立进程，拿不到那个 dispatcher，只能靠环境变量。`opencode/env.ts` 的 `childEnv` 按 `PROXY_URL` 注入 `http_proxy`/`https_proxy`/`all_proxy`，并把本机地址加进 `no_proxy`。systemd 服务环境干净（没有 `http_proxy`），若不注入，opencode 会直连 models.dev / 模型 provider / 远程 MCP 而超时，任务跑不完。
 - **`opencode acp` 没有 `--model`，也无视命令行里选的模型**；不指定就用自己的默认模型。给它选模型只能经 ACP：`session/new` 响应里的 `configOptions`（id/category=`model`）→ `session/set_config_option`（`agent.ts` 调用，值来自 `OPENCODE_MODEL`，纯逻辑在 `opencode/model.ts`，配了却不在可选列表内会报错）。全局 opencode config 的 `model` 是 `providerID` 对象且 provider 名大小写必须与注册的 id 一致（本机是 `deepseek`），写 `DeepSeek/...` 不生效。
 - @/回复 bot 只是给 jev **降低阈值**的提示，不是强制回复（`gate.ts` `decide`）。
