@@ -138,6 +138,9 @@ export const config = {
     url: str("SEARCH_MCP_URL", "https://openwebsearch.flow-serene.life/mcp"),
     // 连接与单次工具调用的超时。
     timeoutMs: num("SEARCH_MCP_TIMEOUT_MS", 30000),
+    // 断连后重连：首次间隔，以及指数退避（×2）的封顶。
+    reconnectMinMs: num("SEARCH_MCP_RECONNECT_MIN_MS", 5000),
+    reconnectMaxMs: num("SEARCH_MCP_RECONNECT_MAX_MS", 60000),
   },
   // 基础能力：让模型在固定仓库里只读地调用 OpenCode（ACP，见 src/opencode/agent.ts）。
   // 需要机器上已安装 opencode 并完成 `opencode auth login`；权限请求一律拒绝，因此只能读不能改。

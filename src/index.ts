@@ -46,7 +46,12 @@ async function main(): Promise<void> {
   // 联网搜索：启动时连一次远程 MCP 服务器并拉取工具清单；失败只告警不阻止启动，搜索停用。
   let search: McpSearch | undefined;
   if (config.search.enabled) {
-    search = new McpSearch({ url: config.search.url, timeoutMs: config.search.timeoutMs });
+    search = new McpSearch({
+      url: config.search.url,
+      timeoutMs: config.search.timeoutMs,
+      reconnectMinMs: config.search.reconnectMinMs,
+      reconnectMaxMs: config.search.reconnectMaxMs,
+    });
     await search.connect().catch((error: Error) => logger.warn(`联网搜索不可用：${error.message}`));
   }
 
