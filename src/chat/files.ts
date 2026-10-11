@@ -1,7 +1,8 @@
 /**
  * files.ts —— 聊天里收到的文件的懒下载与文本读取。
  *
- * 只处理「文本类」文件：按扩展名白名单判定，命中才去解析地址、下载、按 UTF-8 解码。
+ * 只处理「文本类」文件：按扩展名白名单判定，命中才去解析地址、下载、按多编码严格解码
+ * （BOM 优先，其次 UTF-8/GB18030/Big5/Shift_JIS/EUC-KR，见 decode.ts）。
  * 非文本（图片、压缩包、音视频、Office 文档等）一律判不支持，由上层在上下文里说明，
  * 绝不内联二进制、也不落任何临时文件到磁盘。
  *
@@ -12,6 +13,7 @@
  * 便于单测注入假实现（见 tests/files.test.ts）。
  */
 import { logger } from "../logger.js";
+import { decodeTextFile } from "./decode.js";
 import type { ActionResponse } from "../napcat/types.js";
 
 /** NapCat action 调用的最小契约；由 client.callAction 传入（注意需绑定 this，见 index.ts）。 */
@@ -111,16 +113,17 @@ export class FileStore {
       return { status: "failed", reason };
     }
 
-    // 命中文本扩展名但内容含 NUL 字节（二进制特征）或不是合法 UTF-8 时判失败，绝不当作空文本。
-    let content: string;
-    try {
-      if (bytes.includes(0)) throw new Error("含二进制内容");
-      content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    } catch (error) {
-      const reason = `无法按 UTF-8 文本解码（${(error as Error).message}）`;
-      logger.warn(`[file] ${ref.name} 失败：${reason}`);
-      return { status: "failed", reason };
+    // 多编码严格解码：BOM 优先，其次按候选顺序首个成功；二进制或全部失败都有明确 reason。
+    const decoded = decodeTextFile(bytes);
+    if (decoded.status !== "text") {
+      logger.warn(`[file] ${ref.name} 失败：${decoded.reason}`);
+      return { status: "failed", reason: decoded.reason };
     }
+    // 非 UTF-8 命中时显式记录编码，保证「不是 UTF-8」可观察、可排查。
+    if (decoded.encoding !== "utf-8") {
+      logger.info(`[file] ${ref.name} 以 ${decoded.encoding} 解码成功`);
+    }
+    let content = decoded.content;
 
     let truncated = false;
     if (content.length > this.maxChars) {

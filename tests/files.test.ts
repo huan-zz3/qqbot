@@ -53,6 +53,14 @@ test("private file is resolved via get_file and downloaded", async () => {
   assert.deepEqual(calls, [{ action: "get_file", params: { file_id: "fid2" } }]);
 });
 
+// 非 UTF-8（GB18030）文本文件经全链路读取：下载后按 GB18030 解码成功。
+test("gb18030 file content is decoded through the full path", async () => {
+  stubFetch(Buffer.from([0xd6, 0xd0, 0xce, 0xc4])); // "中文"
+  const store = new FileStore(fakeCallAction({ url: "https://x/g.txt" }), 1024, 1000);
+  const result = await store.read({ fileId: "fidgbk", name: "rgl_log_8204.txt", groupId: 500 });
+  assert.deepEqual(result, { status: "text", content: "中文", truncated: false });
+});
+
 // get_file 直接返回 base64 时不再另发下载请求，直接解码内容。
 test("base64 content is decoded without downloading", async () => {
   let fetched = 0;

@@ -33,6 +33,7 @@
 - `src/napcat/` WS 客户端、OneBot 类型、消息段渲染、QQ 表情表。
 - `src/chat/gate.ts` jev 问题与阈值、无 jev 兜底；`runtime.ts` 会话防抖/判断/回复/发送/触发记忆。
 - `src/chat/reply.ts` 提示词、输出解析、分条或合并转发；`stickers.ts`/`images.ts`/`media.ts` 表情包与图片。
+- `src/chat/files.ts` 聊天文件懒下载与文本读取；`decode.ts` 文本字节多编码严格解码（BOM 优先，UTF-8→GB18030→Big5→Shift_JIS→EUC-KR，首个成功；**GB18030 会吞掉多数 Big5/SJIS/EUC-KR 字节**，命中编码记日志以便排查）。
 - `src/chat/memory.ts` 长期记忆（群/私聊分开，按 QQ 号）；`power.ts` 管理员 `/启动` `/停止`（持久化）；`history.ts` 会话消息记录。
 - `src/llm/deepseek.ts` deepseek-flash 工具循环、识图、JSON（失败重试一次）。
 - `src/search/mcp-search.ts` MCP 联网搜索客户端（连接、工具映射、调用）；`src/cli/learn-history.ts` 历史补学。
