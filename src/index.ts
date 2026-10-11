@@ -2,11 +2,11 @@
  * index.ts —— 进程入口：装配依赖、接线事件、处理退出
  *
  * 流程：校验必需配置（缺 DeepSeek key 直接退出）→ 按配置创建各组件（jev 判定、
- * Codex 搜索、只读 OpenCode、表情包、图片识图、记忆、电源开关）→ 建 WS 客户端，把消息事件
+ * MCP 搜索、只读 OpenCode、表情包、图片识图、记忆、电源开关）→ 建 WS 客户端，把消息事件
  * 分发给聊天运行时与群管理 → 注册 SIGINT/SIGTERM 优雅退出（先落盘再断开）。
  *
  * 组件按需创建：配置关闭或初始化失败时对应依赖为 undefined，各模块自行降级
- * （例如无 jev 时 gate 走兜底判定、搜索不可用时不给模型挂 web_search 工具）。
+ * （例如无 jev 时 gate 走兜底判定、搜索不可用时不给模型挂搜索工具）。
  */
 import { statSync } from "node:fs";
 import { isAbsolute } from "node:path";
@@ -27,8 +27,7 @@ import { NapcatClient } from "./napcat/client.js";
 import { isMessageEvent } from "./napcat/types.js";
 import { OpenCodeAgent } from "./opencode/agent.js";
 import { installProxy } from "./proxy.js";
-import { CodexAuth } from "./search/codex-auth.js";
-import { CodexWebSearch } from "./search/web-search.js";
+import { McpSearch } from "./search/mcp-search.js";
 
 async function main(): Promise<void> {
   // 最早安装代理：让后续所有 fetch（含 jev SDK）都走 PROXY_URL；留空则直连。
@@ -44,13 +43,11 @@ async function main(): Promise<void> {
   const judge = config.jev.apiKey ? createJevJudge() : undefined;
   if (!judge) logger.warn("未设置 TYPESAFE_API_KEY：jev 不可用，只在私聊、@、回复、点名时发言");
 
-  // 联网搜索：启动时先取一次凭证，仅为尽早发现「不可用」；失败只告警不阻止启动。
-  // 凭证之后由 runtime 每次使用时再检查（过期后重新同步即可，无需重启）。
-  let search: CodexWebSearch | undefined;
+  // 联网搜索：启动时连一次远程 MCP 服务器并拉取工具清单；失败只告警不阻止启动，搜索停用。
+  let search: McpSearch | undefined;
   if (config.search.enabled) {
-    const auth = new CodexAuth(config.search.authFile);
-    search = new CodexWebSearch(auth);
-    await auth.get().catch((error: Error) => logger.warn(`联网搜索暂不可用：${error.message}`));
+    search = new McpSearch({ url: config.search.url, timeoutMs: config.search.timeoutMs });
+    await search.connect().catch((error: Error) => logger.warn(`联网搜索不可用：${error.message}`));
   }
 
   // 只读 OpenCode（ACP）：显式启用但 cwd 不合法时直接退出，绝不静默不挂工具。
@@ -95,7 +92,7 @@ async function main(): Promise<void> {
   const groups = [...config.bot.groups].join(",") || "（无）";
   const privateUsers = [...config.bot.privateUsers].join(",") || "（无）";
   logger.info(
-    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   // runtime/moderation 先声明再赋值：构造 client 时的事件回调闭包会引用它们。
@@ -128,6 +125,7 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     logger.info("退出中…");
     opencode?.dispose();
+    await search?.dispose().catch(() => undefined);
     await stickers?.flush().catch(() => undefined);
     await memory?.flush().catch(() => undefined);
     await client.shutdown();

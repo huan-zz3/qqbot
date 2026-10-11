@@ -110,7 +110,7 @@ export const config = {
     maxWaitMs: num("GATE_MAX_WAIT_MS", 10000),
     // bot 最近发言次数/间隔的统计窗口，供 jev 权衡别刷屏。
     presenceWindowMs: num("GATE_PRESENCE_WINDOW_MS", 5 * 60 * 1000),
-    // jev 的 needs_search 分数高于它就给模型挂上 web_search 工具。
+    // jev 的 needs_search 分数高于它就给模型挂上联网搜索工具。
     searchThreshold: num("GATE_SEARCH_THRESHOLD", 0.1),
   },
   // TypeSafe AI（jev）判定服务。
@@ -132,15 +132,12 @@ export const config = {
     // 带工具时最多允许几轮工具调用。
     maxToolRounds: num("DEEPSEEK_MAX_TOOL_ROUNDS", 3),
   },
-  // Codex 联网搜索（调用 codex/alpha/search）。
+  // 联网搜索：连一个远程 MCP 服务器，把它暴露的全部工具挂给模型（无常驻凭证）。
   search: {
-    enabled: bool("SEARCH_ENABLED", true),
-    // 同步过来的 Codex 凭证文件（只读、从不刷新）。
-    authFile: str("CODEX_AUTH_FILE", "data/codex-auth.json"),
-    model: str("CODEX_SEARCH_MODEL", "gpt-5.6-luna"),
-    contextSize: str("CODEX_SEARCH_CONTEXT_SIZE", "medium"),
-    maxOutputTokens: num("CODEX_SEARCH_MAX_OUTPUT_TOKENS", 3000),
-    timeoutMs: num("CODEX_SEARCH_TIMEOUT_MS", 60000),
+    enabled: bool("SEARCH_MCP_ENABLED", true),
+    url: str("SEARCH_MCP_URL", "https://openwebsearch.flow-serene.life/mcp"),
+    // 连接与单次工具调用的超时。
+    timeoutMs: num("SEARCH_MCP_TIMEOUT_MS", 30000),
   },
   // 基础能力：让模型在固定仓库里只读地调用 OpenCode（ACP，见 src/opencode/agent.ts）。
   // 需要机器上已安装 opencode 并完成 `opencode auth login`；权限请求一律拒绝，因此只能读不能改。

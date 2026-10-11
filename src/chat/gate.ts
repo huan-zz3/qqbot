@@ -6,7 +6,7 @@
  * - should_reply：概率达到阈值才发言。阈值分档：被 @/被回复用 directThreshold（默认 0.45），
  *   否则群聊用 groupThreshold（0.6）、私聊用 privateThreshold（0.35）；
  * - addressed：是不是在跟机器人说话，只记进日志便于调参，不参与判定；
- * - needs_search：高于 config.gate.searchThreshold（默认 0.1）就建议挂 web_search 工具，
+ * - needs_search：高于 config.gate.searchThreshold（默认 0.1）就建议挂联网搜索工具，
  *   挂不挂得上还要看凭证是否可用（runtime.ts），真搜不搜由模型自己决定。
  *
  * 兜底路径：jev 不可用或调用报错时走 fallback——只有私聊、被 @、被回复、被点名算信号，
@@ -49,7 +49,7 @@ export type GateScores = {
 /** 判断结果。 */
 export type GateDecision = {
   reply: boolean;
-  // 是否给模型挂 web_search 工具；真搜不搜仍由模型自己决定。
+  // 是否给模型挂联网搜索工具；真搜不搜仍由模型自己决定。
   search: boolean;
   reason: string; // 简短理由（进日志）
   source: "rule" | "jev" | "fallback"; // 决定来源

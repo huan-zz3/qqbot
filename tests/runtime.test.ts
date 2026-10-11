@@ -4,7 +4,7 @@
  * 用假的 judge（jev 打分）、假 client（记录发送/动作）、假 fetch（拦截 deepseek 请求并
  * 按队列返回模型输出）驱动真实会话逻辑，覆盖：防抖批处理、被 @ 降低门槛、白名单过滤、
  * [不回复] 跳过、表情包/图片先识图再交给 jev、私聊记忆跨会话使用、@ 名字查询与缓存、
- * web_search 工具挂载条件、长回复合并转发与降级、引用消息（历史命中或 get_msg 拉取）、
+ * 搜索工具挂载条件、长回复合并转发与降级、引用消息（历史命中或 get_msg 拉取）、
  * 回复 bot 同时 @ 他人时的收件人判定等。
  *
  * 注意：config.ts 在 import 时读取 process.env，必须先设置环境变量再动态 import。
@@ -292,12 +292,20 @@ test("@ names are looked up once and shown to jev and the model", async () => {
   assert.equal(actions.filter((action) => action === "get_group_member_info").length, 1);
 });
 
-// 搜索工具挂载条件 = needs_search > 0.1 且 Codex 凭证可用：
-// 0.31 达标挂 web_search；0.05 不挂；凭证失效时哪怕 0.9 也不挂（tools[1]、tools[2] 为 undefined）。
-test("web_search is offered when jev scores it above 0.1 and the token is usable", async () => {
+// 搜索工具挂载条件 = needs_search > 0.1 且 MCP 搜索可用：
+// 0.31 达标挂 MCP 工具；0.05 不挂；不可用时哪怕 0.9 也不挂（tools[1]、tools[2] 为 undefined）。
+test("search tools are offered when jev scores it above 0.1 and the MCP server is usable", async () => {
   let usable = true;
   const scores = [0.31, 0.05, 0.9];
-  const search = { usable: async () => usable, search: async () => "" } as unknown as Deps["search"];
+  const search = {
+    usable: () => usable,
+    tools: () => [
+      {
+        definition: { type: "function", function: { name: "search", description: "", parameters: {} } },
+        handler: async () => "",
+      },
+    ],
+  } as unknown as Deps["search"];
   const { runtime, tools } = setup(
     async () => ({ should_reply: 0.9, addressed: 0.9, needs_search: scores.shift()! }),
     ["a", "b", "c"],
@@ -312,7 +320,7 @@ test("web_search is offered when jev scores it above 0.1 and the token is usable
   usable = false;
   runtime.handle(groupMessage("今天比分多少", [at]));
   await wait(200);
-  assert.equal((tools[0] as { function: { name: string } }[])[0]!.function.name, "web_search");
+  assert.equal((tools[0] as { function: { name: string } }[])[0]!.function.name, "search");
   assert.equal(tools[1], undefined);
   assert.equal(tools[2], undefined);
 });

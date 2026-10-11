@@ -36,7 +36,7 @@ import {
 } from "../napcat/message.js";
 import type { MessageEvent, Segment } from "../napcat/types.js";
 import type { OpenCodeAgent } from "../opencode/agent.js";
-import type { CodexWebSearch } from "../search/web-search.js";
+import type { McpSearch } from "../search/mcp-search.js";
 import { decide, type GateDecision, type Judge } from "./gate.js";
 import type { FileRef, FileStore } from "./files.js";
 import { SessionHistory, formatLine, type ChatRecord, type Quote, type Scope } from "./history.js";
@@ -71,7 +71,7 @@ type Session = {
 export type RuntimeDeps = {
   client: Pick<NapcatClient, "selfId" | "sendMessage" | "sendForward" | "callAction">; // NapCat 客户端能力集
   judge: Judge | undefined; // jev 判定器；未配置 TYPESAFE_API_KEY 时为 undefined
-  search: CodexWebSearch | undefined; // Codex 联网搜索
+  search: McpSearch | undefined; // MCP 联网搜索
   opencode: OpenCodeAgent | undefined; // 只读 OpenCode（ACP）能力
   stickers: StickerStore | undefined; // 表情包收藏
   images?: ImageDescriber | undefined; // 普通图片识图
@@ -426,7 +426,7 @@ export class ChatRuntime {
    * 生成并发送回复：拼上下文 → deepseek 生成 → 去掉重复结尾 → 分条发送或合并转发 → 安排记忆整理。
    * @param records 给模型看的聊天记录（含本批）。
    * @param pending 本批新消息（records 的子集），提示词里用 ★ 标记。
-   * @param withSearch gate 是否建议挂搜索；真正挂载前还会确认 Codex 凭证可用。
+   * @param withSearch gate 是否建议挂搜索；真正挂载前还会确认 MCP 搜索当前可用。
    */
   private async reply(
     session: Session,
@@ -434,8 +434,10 @@ export class ChatRuntime {
     pending: Set<ChatRecord>,
     withSearch: boolean,
   ): Promise<void> {
-    // gate 建议搜索且 Codex 凭证当前可用时，才把 web_search 工具挂给模型；OpenCode 组件存在即挂载。
-    const search = withSearch && (await this.deps.search?.usable()) ? this.deps.search : undefined;
+    // gate 建议搜索且 MCP 搜索当前可用时，才把工具挂给模型；OpenCode 组件存在即挂载。
+    const usableSearch = withSearch && this.deps.search?.usable();
+    if (withSearch && this.deps.search && !usableSearch) logger.debug(`[search] ${session.key} MCP 搜索不可用，跳过挂载`);
+    const search = usableSearch ? this.deps.search : undefined;
     // 相关文件：本批发言人最近发来的文件（新→旧、去重、限 maxFiles）；有才构造「用到才下载」的上下文。
     const files = this.deps.files ? this.collectFiles(session, records, pending) : [];
     if (this.deps.opencode && files.length === 0) logger.debug(`[file] ${session.key} 无可注入文件`);

@@ -37,11 +37,11 @@ function mockFetch(responses: unknown[]): Body[] {
   return bodies;
 }
 
-// 构造一个 web_search 工具：handler 记录 query 并返回固定结果，用于观察工具循环。
+// 构造一个搜索工具：handler 记录 query 并返回固定结果，用于观察工具循环。
 const searchTool = (log: string[]) => ({
   definition: {
     type: "function" as const,
-    function: { name: "web_search", description: "search", parameters: { type: "object", properties: {} } },
+    function: { name: "search", description: "search", parameters: { type: "object", properties: {} } },
   },
   handler: async (args: Record<string, unknown>) => {
     log.push(String(args.query));
@@ -50,7 +50,7 @@ const searchTool = (log: string[]) => ({
 });
 
 /**
- * 完整工具循环：第一轮模型返回 reasoning_content + web_search 工具调用，
+ * 完整工具循环：第一轮模型返回 reasoning_content + search 工具调用，
  * 第二轮给出最终文本。断言：
  * - 返回文本来自第二轮，handler 收到解析后的 query；
  * - 请求体 model 恒为 deepseek-flash、默认 temperature 1.1；
@@ -67,7 +67,7 @@ test("runs tools and passes reasoning_content back", async () => {
           message: {
             content: "",
             reasoning_content: "需要查一下",
-            tool_calls: [{ id: "c1", type: "function", function: { name: "web_search", arguments: '{"query":"答案"}' } }],
+            tool_calls: [{ id: "c1", type: "function", function: { name: "search", arguments: '{"query":"答案"}' } }],
           },
         },
       ],
@@ -107,7 +107,7 @@ test("stops offering tools after the round limit", async () => {
   // 一个永远要求调用工具的响应。
   const call = {
     choices: [
-      { message: { content: "", tool_calls: [{ id: "c", type: "function", function: { name: "web_search", arguments: "{}" } }] } },
+      { message: { content: "", tool_calls: [{ id: "c", type: "function", function: { name: "search", arguments: "{}" } }] } },
     ],
   };
   // 预设 3 轮响应：工具调用、工具调用、最终文本。
@@ -129,7 +129,7 @@ test("stops offering tools after the round limit", async () => {
 test("bad tool arguments are reported to the model instead of throwing", async () => {
   // 第一轮返回 arguments 无法解析为 JSON 的工具调用。
   const bodies = mockFetch([
-    { choices: [{ message: { content: null, tool_calls: [{ id: "x", type: "function", function: { name: "web_search", arguments: "{oops" } }] } }] },
+    { choices: [{ message: { content: null, tool_calls: [{ id: "x", type: "function", function: { name: "search", arguments: "{oops" } }] } }] },
     { choices: [{ message: { content: "ok" } }] },
   ]);
   // 参数非法不中断循环，最终仍拿到文本回复。
