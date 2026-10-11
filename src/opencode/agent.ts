@@ -23,6 +23,8 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
 import { logger } from "../logger.js";
+import { childEnv } from "./env.js";
+import { resolveModelValue } from "./model.js";
 import { decidePermission } from "./permission.js";
 
 /** OpenCodeAgent 的构造参数（来自 config.opencode）。 */
@@ -32,26 +34,14 @@ export type OpenCodeOptions = {
   cwd: string;
   timeoutMs: number;
   maxOutputChars: number;
+  /** OPENCODE_MODEL：要指定的模型（provider/model）；留空则沿用 opencode 默认。 */
+  model?: string;
 };
 
 /** 把任务提示压成单行摘要，供日志使用（截断 80 字符）。 */
 function summarize(prompt: string): string {
   const oneLine = prompt.replace(/\s+/g, " ").trim();
   return oneLine.length > 80 ? `${oneLine.slice(0, 80)}…` : oneLine;
-}
-
-/**
- * 子进程环境：继承当前环境，并确保 no_proxy/NO_PROXY 覆盖本机地址。
- * OpenCode 的 ACP 会用一个本机 HTTP 私有服务做内部通信；若父进程设了 http_proxy
- * 却没把 localhost 排除，这些内部请求会被代理转发而失败（表现为
- * “Internal error: Internal service failure”）。显式排除本机即可，不影响出网仍走代理。
- */
-function childEnv(): NodeJS.ProcessEnv {
-  const existing = process.env.no_proxy ?? process.env.NO_PROXY ?? "";
-  const entries = new Set(existing.split(",").map((item) => item.trim()).filter(Boolean));
-  for (const host of ["127.0.0.1", "localhost", "::1"]) entries.add(host);
-  const merged = [...entries].join(",");
-  return { ...process.env, no_proxy: merged, NO_PROXY: merged };
 }
 
 /**
@@ -167,6 +157,16 @@ export class OpenCodeAgent {
 
           const session = await ctx.buildSession(cwd).start({ cancellationSignal });
           logger.info(`[opencode] 会话 ${session.sessionId} 已建立`);
+          // 显式指定模型：opencode acp 没有 --model，只能经 session/set_config_option 设置。
+          const model = resolveModelValue(session.newSessionResponse.configOptions, this.options.model ?? "");
+          if (model) {
+            await ctx.request(
+              acp.methods.agent.session.setConfigOption,
+              { sessionId: session.sessionId, configId: "model", value: model },
+              { cancellationSignal },
+            );
+            logger.info(`[opencode] 模型=${model}`);
+          }
           try {
             // prompt 的响应给出 stopReason；readText 累积文本直到本轮结束。
             const promptPromise = session.prompt(prompt, { cancellationSignal });

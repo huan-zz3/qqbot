@@ -20,6 +20,8 @@
 - ESM + `NodeNext`：**import 必须带 `.js` 后缀**（`import { config } from "./config.js"`），即使源文件是 `.ts`。
 - 挂了工具时，DeepSeek 要求把前序 assistant 回合的 `reasoning_content` 原样回传，否则 400（`llm/deepseek.ts` 的 `chatWithTools`）。
 - 联网搜索靠外部 MCP 服务器：连接断了或服务器挂了就置为不可用并打日志，不自动重连，重启恢复；工具清单在启动时拉取一次（`search/mcp-search.ts`）。
+- **bot 自身出网靠 undici `ProxyAgent`（`proxy.ts`），只作用于本进程**；spawn 出的 `opencode acp` 是独立进程，拿不到那个 dispatcher，只能靠环境变量。`opencode/env.ts` 的 `childEnv` 按 `PROXY_URL` 注入 `http_proxy`/`https_proxy`/`all_proxy`，并把本机地址加进 `no_proxy`。systemd 服务环境干净（没有 `http_proxy`），若不注入，opencode 会直连 models.dev / 模型 provider / 远程 MCP 而超时，任务跑不完。
+- **`opencode acp` 没有 `--model`，也无视命令行里选的模型**；不指定就用自己的默认模型。给它选模型只能经 ACP：`session/new` 响应里的 `configOptions`（id/category=`model`）→ `session/set_config_option`（`agent.ts` 调用，值来自 `OPENCODE_MODEL`，纯逻辑在 `opencode/model.ts`，配了却不在可选列表内会报错）。全局 opencode config 的 `model` 是 `providerID` 对象且 provider 名大小写必须与注册的 id 一致（本机是 `deepseek`），写 `DeepSeek/...` 不生效。
 - @/回复 bot 只是给 jev **降低阈值**的提示，不是强制回复（`gate.ts` `decide`）。
 - 聊天记录写成 `说话人 → 对象：正文（引用 某人的「原文」）`（`history.ts` `formatLine`/`relation`）；jev 输入、回复提示词、记忆提示词必须保持同一格式。
 - 提示词只给事实，不给规则或示例句：不写长度/语气要求，不放例句（模型会照抄）（`reply.ts` `buildSystemPrompt`）。
@@ -34,6 +36,7 @@
 - `src/chat/memory.ts` 长期记忆（群/私聊分开，按 QQ 号）；`power.ts` 管理员 `/启动` `/停止`（持久化）；`history.ts` 会话消息记录。
 - `src/llm/deepseek.ts` deepseek-flash 工具循环、识图、JSON（失败重试一次）。
 - `src/search/mcp-search.ts` MCP 联网搜索客户端（连接、工具映射、调用）；`src/cli/learn-history.ts` 历史补学。
+- `src/opencode/` 只读 OpenCode（ACP）：`agent.ts` 进程编排、`env.ts` 子进程环境（代理）、`model.ts` 模型选择、`permission.ts` 权限裁决。
 - `deploy/` systemd unit；`scripts/build-sea.mjs` 打包单文件可执行。
 
 ## 约定

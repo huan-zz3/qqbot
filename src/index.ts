@@ -64,6 +64,7 @@ async function main(): Promise<void> {
       cwd,
       timeoutMs: config.opencode.timeoutMs,
       maxOutputChars: config.opencode.maxOutputChars,
+      model: config.opencode.model,
     });
   }
 
