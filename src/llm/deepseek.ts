@@ -18,6 +18,15 @@ import { logger } from "../logger.js";
 /** 硬编码的模型名：全项目唯一使用的模型，不提供其它模型或降级路径。 */
 export const DEEPSEEK_MODEL = "deepseek-flash";
 
+/**
+ * 工具额度用尽那一轮追加给模型的收尾指令（user 消息）。
+ * 目的：让模型明确知道工具已不可用，只能纯文本作答，避免它把工具调用语法
+ * （function_calls/invoke/parameter 或 <|DSML|> 标记）当作普通文本写出、进而被当消息发出去。
+ */
+const TOOL_QUOTA_NOTICE =
+  "工具调用次数已用尽，本轮起不再提供任何工具。请不要再输出任何工具调用，包括 function_calls、" +
+  "invoke、parameter 等标签或 <|DSML|> 之类的特殊标记；直接用文字回答。";
+
 /** 模型请求调用工具的动作（OpenAI 兼容格式）；arguments 是 JSON 字符串，需先解析。 */
 export type ToolCall = {
   id: string;
@@ -117,6 +126,9 @@ async function complete(
  * 每轮携带可用工具调用模型；模型返回 tool_calls 时并行执行、把结果按原顺序作为 tool 消息回填，
  * 再进入下一轮；模型不再调用工具（或达到 maxToolRounds 后不再提供工具）时，返回其回复文本。
  *
+ * 收尾轮（maxToolRounds 用尽、不再挂工具）：追加一条 user 收尾指令明确要求纯文本作答；
+ * 该轮为真正的最后一轮——若模型仍返回 tool_calls，不再执行，直接取其文本内容收尾。
+ *
  * 注意：挂了工具时，DeepSeek 要求每个前序 assistant 回合的 reasoning_content 原样回传，
  * 否则会 400，因此 assistant 消息会保留该字段。
  *
@@ -129,10 +141,21 @@ export async function chatWithTools(initial: ChatMessage[], tools: Tool[]): Prom
   const messages = [...initial];
   // 按函数名索引工具，供 runTool 派发。
   const byName = new Map(tools.map((tool) => [tool.definition.function.name, tool]));
+  // 收尾指令只注入一次：即使循环意外继续，也不重复追加。
+  let finalNoticeSent = false;
 
   for (let round = 0; ; round++) {
     // 超过 maxToolRounds 后不再提供工具，迫使模型收尾给出文本。
-    const offerTools = round < config.deepseek.maxToolRounds ? tools.map((tool) => tool.definition) : [];
+    const finalRound = round >= config.deepseek.maxToolRounds;
+    // 只在「确实给过工具、且配额>0」时才注入收尾指令；否则是本来就没挂工具的普通调用，无需干预。
+    if (finalRound && !finalNoticeSent && config.deepseek.maxToolRounds > 0 && tools.length > 0) {
+      finalNoticeSent = true;
+      messages.push({ role: "user", content: TOOL_QUOTA_NOTICE });
+      logger.info(
+        `[deepseek] round=${round} 工具额度用尽（maxToolRounds=${config.deepseek.maxToolRounds}），要求模型纯文本作答`,
+      );
+    }
+    const offerTools = finalRound ? [] : tools.map((tool) => tool.definition);
     const result = await complete(messages, offerTools, { temperature: config.deepseek.temperature });
     const message = result.choices?.[0]?.message;
     // choices / message 缺失说明响应异常。
@@ -143,6 +166,11 @@ export async function chatWithTools(initial: ChatMessage[], tools: Tool[]): Prom
     );
 
     const calls = message.tool_calls ?? [];
+    // 收尾轮为真正的最后一轮：模型若仍返回工具调用，不再执行（额度已用尽），直接取其文本内容收尾。
+    if (calls.length > 0 && finalRound) {
+      logger.warn(`[deepseek] round=${round} 工具额度已用尽，忽略模型返回的 ${calls.length} 个工具调用`);
+      return message.content?.trim() ?? "";
+    }
     const assistant: ChatMessage = { role: "assistant", content: message.content ?? "" };
     // reasoning_content 必须原样保留：挂了工具时 DeepSeek 会校验前序回合的该字段。
     if (message.reasoning_content) assistant.reasoning_content = message.reasoning_content;

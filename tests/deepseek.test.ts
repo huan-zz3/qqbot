@@ -5,7 +5,8 @@
  * - chatWithTools：执行工具并把结果回填给模型，返回最终文本；请求体 model 固定
  *   deepseek-flash、默认温度 1.1；前序 assistant 回合的 reasoning_content
  *   必须原样回传（DeepSeek 挂工具时的硬性要求，否则接口 400）；
- * - 工具轮数上限（DEEPSEEK_MAX_TOOL_ROUNDS=2）之后不再提供工具；
+ * - 工具轮数上限（DEEPSEEK_MAX_TOOL_ROUNDS=2）之后不再提供工具，并追加一条 user 收尾指令；
+ *   收尾轮若模型仍返回 tool_calls，不再执行，直接取其文本内容收尾；
  * - 工具参数不是合法 JSON 时，把错误文本作为工具结果交回模型而非抛错；
  * - completeJson：解析失败重试一次，两次都失败才抛错；JSON 调用不提交 temperature。
  *
@@ -120,6 +121,30 @@ test("stops offering tools after the round limit", async () => {
   assert.ok(bodies[0]!.tools && bodies[1]!.tools);
   // 超过上限后不再提供工具，迫使模型收尾。
   assert.equal(bodies[2]!.tools, undefined);
+  // 收尾轮额外注入一条 user 收尾指令（明确要求纯文本作答）。
+  assert.equal(bodies[2]!.messages.at(-1).role, "user");
+  assert.match(bodies[2]!.messages.at(-1).content, /工具调用次数已用尽/);
+});
+
+/**
+ * 收尾轮模型不守规矩、仍返回 tool_calls 时：不再执行（额度已用尽），
+ * 直接取其文本内容收尾，保证循环终止、工具 handler 不被多调。
+ */
+test("ignores tool calls returned after the round limit", async () => {
+  // 一个永远要求调用工具的响应（收尾轮也带上一段文本）。
+  const call = {
+    choices: [
+      { message: { content: "还想调", tool_calls: [{ id: "c", type: "function", function: { name: "search", arguments: "{}" } }] } },
+    ],
+  };
+  const bodies = mockFetch([call, call, call]);
+  const log: string[] = [];
+  const text = await chatWithTools([{ role: "user", content: "q" }], [searchTool(log)]);
+  // 收尾轮的文本内容被采用。
+  assert.equal(text, "还想调");
+  // 总共 3 次请求；前两轮执行了工具，收尾轮的调用被忽略。
+  assert.equal(bodies.length, 3);
+  assert.equal(log.length, 2);
 });
 
 /**
