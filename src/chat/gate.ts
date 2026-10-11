@@ -4,13 +4,15 @@
  * 主路径：把会话快照（聊天场景、机器人身份与活跃度、旧消息 earlier、新消息 pending）打包成
  * TypeSafe（jev）的 state，并问三个是非题（buildQuestions）：
  * - should_reply：概率达到阈值才发言。阈值分档：被 @/被回复用 directThreshold（默认 0.45），
- *   否则群聊用 groupThreshold（0.6）、私聊用 privateThreshold（0.35）；
+ *   否则群聊用 groupThreshold（0.6）、私聊用 privateThreshold（0.35）；GATE_DIRECT_USERS 名单里的
+ *   QQ 被 @ 或被回复时视同 bot 自己，同样归入 direct（见 isDirect）；
  * - addressed：是不是在跟机器人说话，只记进日志便于调参，不参与判定；
  * - needs_search：高于 config.gate.searchThreshold（默认 0.1）就建议挂联网搜索工具，
  *   挂不挂得上还要看凭证是否可用（runtime.ts），真搜不搜由模型自己决定。
  *
  * 兜底路径：jev 不可用或调用报错时走 fallback——只有私聊、被 @、被回复、被点名算信号，
  * 纯反应消息（isBareReaction）不回复；搜索则一律挂上，交给模型判断。
+ * GATE_DIRECT_USERS 名单里的 QQ 被 @/被回复也视同 bot 自己（direct），两条路径一致生效。
  *
  * 关键约束：@ 和被回复只是**降低阈值**的提示，绝不强制回复；机器人最近一段时间的活跃度
  * 也放进 state 交给 jev 自己权衡，代码里没有硬性冷却。
@@ -126,6 +128,20 @@ export function isBareReaction(text: string): boolean {
 }
 
 /**
+ * 本条消息是否「直接指向」bot：被 @ 或被回复。GATE_DIRECT_USERS 名单里的 QQ 被 @ 或被回复时
+ * 视同 bot 自己。decide 的阈值与 runtime 的防抖时长共用此判定，语义保持一致。
+ * @param record 消息记录
+ */
+export function isDirect(record: ChatRecord): boolean {
+  if (record.atBot || record.replyToBot) return true;
+  const watched = config.gate.directUsers;
+  if (watched.size === 0) return false;
+  // 本条 @ 到了名单里的某人；或本条回复的消息来自名单里的某人（作者 QQ 未知时无从判断）。
+  if (record.mentions?.some((id) => watched.has(id))) return true;
+  return record.quote?.userId !== undefined && watched.has(record.quote.userId);
+}
+
+/**
  * 判断该不该发言。
  * jev 可用时问三个是非题并按当前阈值判定（被 @/被回复时改用 directThreshold）；
  * jev 缺失或调用报错时切到规则兜底。返回值同时携带搜索建议与分数（供日志/调参）。
@@ -134,7 +150,7 @@ export function isBareReaction(text: string): boolean {
  */
 export async function decide(ctx: GateContext, judge: Judge | undefined): Promise<GateDecision> {
   // @ 和回复只是降低门槛；最终仍由 jev 结合机器人近期活跃度判断。
-  const direct = ctx.pending.some((record) => record.atBot || record.replyToBot);
+  const direct = ctx.pending.some(isDirect);
   const mentioned = ctx.pending.some((record) => record.mentionsBot);
 
   if (judge) {

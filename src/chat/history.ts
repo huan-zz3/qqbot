@@ -16,8 +16,8 @@ import type { FileRef } from "./files.js";
 /** 会话类型：群聊或私聊；长期记忆按此分区。 */
 export type Scope = "group" | "private";
 
-/** 被引用（回复）的消息快照：作者展示名、正文、是否来自 bot。 */
-export type Quote = { name: string; text: string; fromBot: boolean };
+/** 被引用（回复）的消息快照：作者展示名、正文、是否来自 bot，以及作者 QQ（可能缺失）。 */
+export type Quote = { name: string; text: string; fromBot: boolean; userId?: number };
 
 /**
  * 一条会话消息记录。

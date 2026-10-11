@@ -102,6 +102,8 @@ export const config = {
     privateThreshold: num("GATE_PRIVATE_THRESHOLD", 0.35),
     // 被 @ 或被回复会降低门槛，但低于此分数的基本不是在跟 bot 说话。
     directThreshold: num("GATE_DIRECT_THRESHOLD", 0.45),
+    // 名单里的 QQ 被 @ 或被回复时视同 bot 自己，也走 directThreshold（防抖同样按 direct 处理）。
+    directUsers: idSet("GATE_DIRECT_USERS"),
     // 等消息停下多久再判断（私聊/直呼场景更短）。
     groupDebounceMs: num("GATE_GROUP_DEBOUNCE_MS", 3000),
     privateDebounceMs: num("GATE_PRIVATE_DEBOUNCE_MS", 1500),

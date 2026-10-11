@@ -42,7 +42,7 @@ NapCat ──WS──> 收消息 ──防抖合并──> jev 判断 ──是�
 
 | 问题 | 用途 |
 | --- | --- |
-| `should_reply` | 达到阈值才发言：群聊 0.6、私聊 0.35、被 @ 或回复 0.45 |
+| `should_reply` | 达到阈值才发言：群聊 0.6、私聊 0.35、被 @ 或回复 0.45（`GATE_DIRECT_USERS` 名单里的 QQ 被 @ 或回复同样按 0.45） |
 | `addressed` | 是不是在跟机器人说话，记录在日志里便于调参 |
 | `needs_search` | 高于 0.1 就给模型挂上 MCP 搜索工具（前提是 MCP 服务器可用） |
 
@@ -166,6 +166,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `GATE_GROUP_THRESHOLD` | 0.6 | 群聊发言阈值，调低更活跃 |
 | `GATE_PRIVATE_THRESHOLD` | 0.35 | 私聊发言阈值 |
 | `GATE_DIRECT_THRESHOLD` | 0.45 | 被 @ 或被回复时的阈值 |
+| `GATE_DIRECT_USERS` | | 名单里的 QQ 被 @ 或被回复时视同机器人自己被 @/回复，同样走 0.45 这个 direct 阈值（防抖也按 direct 处理）；逗号分隔 |
 | `HISTORY_CONTEXT_MESSAGES` | 40 | 给 jev 和模型看的最近消息条数 |
 | `GATE_SEARCH_THRESHOLD` | 0.1 | `needs_search` 高于它就挂上搜索工具 |
 | `OPENCODE_ENABLED` / `OPENCODE_CWD` | false / | 启用只读 OpenCode；`CWD` 是允许访问的仓库绝对路径 |

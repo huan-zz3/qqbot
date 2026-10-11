@@ -4,6 +4,7 @@
  * 覆盖：
  * - jev 分数与阈值比较决定回不回；达到阈值时来源标记为 jev；
  * - 被 @ / 被回复时改用更低的 direct 阈值，但 jev 仍可否决（@ 不强制回复）；
+ * - GATE_DIRECT_USERS 名单里的 QQ 被 @ / 被回复时视同 bot 自己，同样走 direct 阈值；
  * - needs_search 严格大于 0.1 才建议挂搜索；无 jev 的兜底路径一律挂；
  * - 没有硬性冷却：bot 刚发过言也由 jev 依据 state 里的活跃度自行权衡；
  * - buildState 把 bot 活跃度与 bot 自身消息标记整理进 jev 输入；
@@ -19,6 +20,7 @@ import { test } from "node:test";
 process.env.GATE_GROUP_THRESHOLD = "0.6";
 process.env.GATE_PRIVATE_THRESHOLD = "0.35";
 process.env.GATE_DIRECT_THRESHOLD = "0.3";
+process.env.GATE_DIRECT_USERS = "10001,10002";
 process.env.GATE_SEARCH_THRESHOLD = "0.1";
 
 // 动态引入被测模块（env 已生效）。
@@ -102,6 +104,53 @@ test("@ or reply lowers the bar but jev can still decline", async () => {
   assert.equal(no.reply, false);
   // 拒绝也来自 jev（没有走兜底规则）。
   assert.equal(no.source, "jev");
+});
+
+/**
+ * GATE_DIRECT_USERS 名单（本测试设为 10001,10002）里的 QQ 被 @ 或被回复时视同 bot 自己：
+ * 生效阈值降到 direct 阈值 0.3；名单外的人被 @/回复仍是群聊阈值 0.6；
+ * 有引用但作者 QQ 未知时不误判为 direct。
+ */
+test("watched QQ @ or reply uses the direct threshold", async () => {
+  // @ 了名单里的 QQ。
+  const atWatched = await decide(
+    context({ pending: [record({ mentions: [10001], text: "@10001 你怎么看" })] }),
+    judge({ should_reply: 0.4, addressed: 0.2 }),
+  );
+  assert.equal(atWatched.reply, true);
+  // 生效阈值是 direct 阈值 0.3。
+  assert.equal(atWatched.scores!.threshold, 0.3);
+
+  // 回复的消息来自名单里的 QQ（作者 QQ 10002）。
+  const replyWatched = await decide(
+    context({ pending: [record({ quote: { name: "李四", text: "在吗", fromBot: false, userId: 10002 } })] }),
+    judge({ should_reply: 0.4, addressed: 0.2 }),
+  );
+  assert.equal(replyWatched.reply, true);
+  assert.equal(replyWatched.scores!.threshold, 0.3);
+
+  // @ 了名单外的人：仍走群聊阈值 0.6，0.5 不回复。
+  const other = await decide(
+    context({ pending: [record({ mentions: [99999] })] }),
+    judge({ should_reply: 0.5, addressed: 0.2 }),
+  );
+  assert.equal(other.reply, false);
+  assert.equal(other.scores!.threshold, 0.6);
+
+  // 有引用但作者 QQ 未知：不判为 direct，仍是群聊阈值 0.6。
+  const unknown = await decide(
+    context({ pending: [record({ quote: { name: "某人", text: "…", fromBot: false } })] }),
+    judge({ should_reply: 0.5, addressed: 0.2 }),
+  );
+  assert.equal(unknown.scores!.threshold, 0.6);
+});
+
+/**
+ * 无 jev 的兜底路径同样受益：@ 到名单里的 QQ 算信号，且有实义内容时可回复。
+ */
+test("watched QQ is a signal on the no-jev fallback path", async () => {
+  const pending = [record({ mentions: [10001], text: "帮我看看这个报错" })];
+  assert.equal((await decide(context({ pending }), undefined)).reply, true);
 });
 
 /**

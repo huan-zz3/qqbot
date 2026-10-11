@@ -37,7 +37,7 @@ import {
 import type { MessageEvent, Segment } from "../napcat/types.js";
 import type { OpenCodeAgent } from "../opencode/agent.js";
 import type { McpSearch } from "../search/mcp-search.js";
-import { decide, type GateDecision, type Judge } from "./gate.js";
+import { decide, isDirect, type GateDecision, type Judge } from "./gate.js";
 import type { FileRef, FileStore } from "./files.js";
 import { SessionHistory, formatLine, type ChatRecord, type Quote, type Scope } from "./history.js";
 import type { ImageDescriber } from "./images.js";
@@ -179,7 +179,7 @@ export class ChatRuntime {
 
     // 引用消息优先在本地历史里找，找不到再从 NapCat 异步拉取。
     const known = replyTo !== undefined ? session.history.byId(replyTo) : undefined;
-    if (known) record.quote = { name: known.name, text: known.text, fromBot: known.fromBot };
+    if (known) record.quote = { name: known.name, text: known.text, fromBot: known.fromBot, userId: known.userId };
     const nameMentions = () => mentions.map((userId) => atName(userId) ?? "某人");
     // 先用已知群名片填一遍 @ 名字；解析不到的等 lookupMember 完成后回填。
     record.mentionNames = nameMentions();
@@ -310,7 +310,9 @@ export class ChatRuntime {
       const fromBot = data?.user_id === selfId;
       // 引用机器人自己时署名用 bot 名；拿不到名字时用「某人」兜底。
       const name = fromBot ? config.bot.name : data?.sender?.card || data?.sender?.nickname || "某人";
-      return { name, text, fromBot };
+      // 缺作者 QQ 时无法判断引用是否来自 GATE_DIRECT_USERS 名单里的 QQ，记一条 debug 便于排查（不阻断主流程）。
+      if (data?.user_id === undefined) logger.debug(`获取引用消息 ${messageId} 缺少作者 QQ，无法判断是否直接指向`);
+      return { name, text, fromBot, userId: data?.user_id };
     } catch (error) {
       // get_msg 失败（消息过旧、未缓存等）不阻断主流程。
       logger.debug(`获取引用消息失败 ${messageId}:`, (error as Error).message);
@@ -355,8 +357,8 @@ export class ChatRuntime {
     if (session.busy || session.pending.length === 0) return;
     const now = Date.now();
     session.firstPendingAt ??= now;
-    // 本批里是否有直接指向机器人的消息。
-    const direct = session.pending.some((record) => record.atBot || record.replyToBot);
+    // 本批里是否有直接指向机器人的消息（含被名单 QQ 指向的，见 gate.isDirect）。
+    const direct = session.pending.some(isDirect);
     const debounce = direct
       ? config.gate.directDebounceMs
       : session.scope === "group"
