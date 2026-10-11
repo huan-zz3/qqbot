@@ -93,7 +93,7 @@ async function main(): Promise<void> {
   const groups = [...config.bot.groups].join(",") || "（无）";
   const privateUsers = [...config.bot.privateUsers].join(",") || "（无）";
   logger.info(
-    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   // runtime/moderation 先声明再赋值：构造 client 时的事件回调闭包会引用它们。

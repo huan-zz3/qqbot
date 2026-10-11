@@ -442,6 +442,8 @@ export class ChatRuntime {
     const files = this.deps.files ? this.collectFiles(session, records, pending) : [];
     if (this.deps.opencode && files.length === 0) logger.debug(`[file] ${session.key} 无可注入文件`);
     const opencodeContext = files.length > 0 ? () => this.buildFileContext(files) : undefined;
+    // 配了提示文本时，opencode 开始执行前先发一条；未配置则不传回调，行为与原来一致。
+    const onOpencodeStart = config.opencode.notice ? () => this.sendOpencodeNotice(session) : undefined;
     const generated = await generateReply(
       {
         scope: session.scope,
@@ -455,7 +457,7 @@ export class ChatRuntime {
         now: Date.now(),
         filesEnabled: this.deps.files !== undefined,
       },
-      { search, opencode: this.deps.opencode, opencodeContext },
+      { search, opencode: this.deps.opencode, opencodeContext, onOpencodeStart },
     );
     // 机器人最近发过的文本，用来检查是否在复读同一个结尾。
     const recentBot = records.filter((record) => record.fromBot).map((record) => record.text);
@@ -535,6 +537,20 @@ export class ChatRuntime {
     ].join("\n\n");
     logger.info(`[file] 注入 opencode 文件 ${files.length} 个，${context.length} 字符`);
     return context;
+  }
+
+  /**
+   * 发送 opencode 开始探索的提示并写入历史（复用 recordSent，产生同一套 [send] 日志）。
+   * 提示属于附属行为：发送失败只记 warn、不重抛，避免中断正在进行的探索任务。
+   */
+  private async sendOpencodeNotice(session: Session): Promise<void> {
+    const text = config.opencode.notice;
+    if (!text) return;
+    try {
+      this.recordSent(session, await this.deps.client.sendMessage(session.target, [textSegment(text)]), text);
+    } catch (error) {
+      logger.warn(`[send] ${session.key} opencode 提示发送失败:`, (error as Error).message);
+    }
   }
 
   /** 安排记忆整理：重置已有定时器，delay 毫秒后执行；未配置 memory 时直接跳过。 */

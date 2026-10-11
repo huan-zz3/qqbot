@@ -151,6 +151,8 @@ export const config = {
     // 给 ACP 会话指定的模型（provider/model，如 deepseek/deepseek-flash）；留空则用 opencode 自己的默认。
     // 注意：`opencode acp` 没有 --model，也无视命令行模型的指定，必须经 ACP 的 model 配置项设置。
     model: str("OPENCODE_MODEL"),
+    // opencode 开始执行（模型调用该工具）时先发的一条提示文本；留空则不发，行为与未启用时一致。
+    notice: str("OPENCODE_NOTICE_TEXT"),
     // 固定仓库的绝对路径；为空则视为未配置（启用时会启动失败）。
     cwd: str("OPENCODE_CWD"),
     // 单次任务的总超时；超时会取消任务并杀掉子进程。

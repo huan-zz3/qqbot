@@ -205,8 +205,12 @@ export function planSends(parts: ReplyPart[]): Outgoing[] {
  * 构造挂给模型的 opencode 工具：把模型给的任务交给只读的 OpenCodeAgent 在仓库里执行。
  * @param agent OpenCode 客户端。
  * @param context 可选的懒加载上下文（文本类文件内容）；仅在工具被真正调用时求值，与任务一并交给 OpenCode。
+ * @param onStart 可选的“开始执行”通知；本次工具实例首次真正调用时触发一次（同批多次调用也只触发一次）。
+ *   契约：它必须自行处理失败、不得抛出——否则会把探索流程一并中断。
  */
-export function openCodeTool(agent: OpenCodeAgent, context?: () => Promise<string>): Tool {
+export function openCodeTool(agent: OpenCodeAgent, context?: () => Promise<string>, onStart?: () => void | Promise<void>): Tool {
+  // 只属于本次工具实例的标记：保证同一批只通知一次。
+  let notified = false;
   return {
     definition: {
       type: "function",
@@ -226,6 +230,11 @@ export function openCodeTool(agent: OpenCodeAgent, context?: () => Promise<strin
       // 参数来自模型，需做类型检查；空 prompt 返回错误文本给模型自行修正。
       const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
       if (!prompt) return "prompt 不能为空";
+      // 探索即将开始：先通知（仅首次），再求值文件上下文。
+      if (onStart && !notified) {
+        notified = true;
+        await onStart();
+      }
       // 只在工具真的被调用时才取文件上下文（用到才下载）。
       const extra = context ? (await context()).trim() : "";
       if (extra) logger.info(`[opencode] 注入文件上下文 ${extra.length} 字符`);
@@ -240,6 +249,8 @@ export type ReplyTools = {
   opencode?: OpenCodeAgent;
   // opencode 被调用时注入的上下文（文本类文件内容）；缺省表示没有相关文件。
   opencodeContext?: () => Promise<string>;
+  // opencode 开始执行时的一次性通知（如“正在查看”）；缺省表示不发。
+  onOpencodeStart?: () => void | Promise<void>;
 };
 
 /**
@@ -251,7 +262,7 @@ export type ReplyTools = {
 export async function generateReply(ctx: ReplyContext, backends: ReplyTools): Promise<ReplyPart[]> {
   const tools: Tool[] = [];
   if (backends.search) tools.push(...backends.search.tools());
-  if (backends.opencode) tools.push(openCodeTool(backends.opencode, backends.opencodeContext));
+  if (backends.opencode) tools.push(openCodeTool(backends.opencode, backends.opencodeContext, backends.onOpencodeStart));
   const toolNames = tools.map((tool) => tool.definition.function.name);
   const messages: ChatMessage[] = [
     { role: "system", content: buildSystemPrompt(ctx, toolNames, backends.search !== undefined) },

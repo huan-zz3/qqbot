@@ -145,7 +145,7 @@ journalctl -u qqbot -f -o cat   # 看每条消息的 jev 分数和决定
 - 服务器上安装 [OpenCode](https://opencode.ai) 并完成 `opencode auth login`（用它自己的登录态，与本项目的 MCP 联网搜索无关）；
 - `.env` 里设 `OPENCODE_ENABLED=true` 与 `OPENCODE_CWD=/绝对路径/到/仓库`（非绝对路径或不是已存在的目录时，启动会报错退出，不会静默失效）。
 
-调用与否由模型自己决定；一次任务同步执行，超时会先取消再杀掉子进程。白名单内的群 / 私聊都能触发，结果发在原会话。提示词里给模型的说明可用 `OPENCODE_PROMPT` 自定义，用来框定「什么情况下该调用」。
+调用与否由模型自己决定；一次任务同步执行，超时会先取消再杀掉子进程。白名单内的群 / 私聊都能触发，结果发在原会话。提示词里给模型的说明可用 `OPENCODE_PROMPT` 自定义，用来框定「什么情况下该调用」。可用 `OPENCODE_NOTICE_TEXT` 在探索开始时先发一条提示（例如「正在查看，请稍等…」），留空则不发；该提示会作为一条普通消息发出并写入会话历史，因此群聊里随后的正式回复可能带上对最后一条消息的引用。
 
 **必须显式指定模型**：`opencode acp` 没有 `--model` 参数，也无视命令行里选中的模型，不指定就会用它自己的默认模型（可能又贵又不是你要的，且你那台机器上全局 config 写的 `DeepSeek/deepseek-v4-pro` 因 provider 大小写不匹配而没生效）。因此用 `OPENCODE_MODEL=<provider>/<model>`（如 `deepseek/deepseek-flash`）指定；bot 会在建好会话后经 ACP 的 `session/set_config_option`（`configId=model`）设置它。留空则沿用 opencode 默认（README 不推荐）。配了却不在可选模型内会在任务失败时报出可选值，不做静默回退。
 
@@ -169,6 +169,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `OPENCODE_ENABLED` / `OPENCODE_CWD` | false / | 启用只读 OpenCode；`CWD` 是允许访问的仓库绝对路径 |
 | `OPENCODE_PROMPT` | （内置只读说明） | 提示词里给模型的 opencode 说明，用来框定「什么情况下该调用」 |
 | `OPENCODE_MODEL` | | 给 ACP 会话指定的模型（`provider/model`，如 `deepseek/deepseek-flash`）；留空用 opencode 自己的默认（可能很贵） |
+| `OPENCODE_NOTICE_TEXT` | | opencode 开始执行时先发出的提示文本；留空则不发（会写入会话历史） |
 | `GATE_GROUP_DEBOUNCE_MS` | 3000 | 群里等消息停下多久再判断 |
 | `DEEPSEEK_THINKING` | false | deepseek-flash 的思考模式 |
 | `DEEPSEEK_TEMPERATURE` | 1.1 | 回复的采样温度；1.3 会冒出奇怪的外文标点和单词 |

@@ -122,3 +122,52 @@ test("opencode tool does not evaluate context for an empty prompt", async () => 
   assert.equal(calls, 0);
   assert.deepEqual(agent.calls, []);
 });
+
+// onStart 通知：正常调用时恰好触发一次，且早于后端执行。
+test("opencode tool notifies once, before running the backend", async () => {
+  const agent = fakeAgent();
+  const events: string[] = [];
+  const originalRun = agent.run;
+  agent.run = async (prompt: string) => {
+    events.push("run");
+    return originalRun(prompt);
+  };
+  const tool = openCodeTool(agent as never, undefined, () => {
+    events.push("notice");
+  });
+  assert.equal(await tool.handler({ prompt: "看看代码" }), "结果");
+  assert.deepEqual(events, ["notice", "run"]);
+});
+
+// 同一工具实例多次调用（同批多次 opencode），通知只触发一次。
+test("opencode tool notifies only once per instance", async () => {
+  const agent = fakeAgent();
+  let notices = 0;
+  const tool = openCodeTool(agent as never, undefined, () => {
+    notices++;
+  });
+  await tool.handler({ prompt: "a" });
+  await tool.handler({ prompt: "b" });
+  assert.equal(notices, 1);
+  assert.deepEqual(agent.calls, ["a", "b"]);
+});
+
+// prompt 为空时不触发通知、也不调用后端。
+test("opencode tool does not notify for an empty prompt", async () => {
+  const agent = fakeAgent();
+  let notices = 0;
+  const tool = openCodeTool(agent as never, undefined, () => {
+    notices++;
+  });
+  assert.equal(await tool.handler({}), "prompt 不能为空");
+  assert.equal(notices, 0);
+  assert.deepEqual(agent.calls, []);
+});
+
+// 不传 onStart 时行为与原来一致（回归）。
+test("opencode tool runs without an onStart callback", async () => {
+  const agent = fakeAgent();
+  const tool = openCodeTool(agent as never);
+  assert.equal(await tool.handler({ prompt: "hi" }), "结果");
+  assert.deepEqual(agent.calls, ["hi"]);
+});
