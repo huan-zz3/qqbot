@@ -1,7 +1,7 @@
 /**
  * moderation.ts —— 群管理：机器人以群主/管理员身份自主巡查群消息，执行撤回/禁言/回复。
  *
- * 流程：每条群消息连同它前面 MODERATION_CONTEXT_MESSAGES 条上下文交给 jev，
+ * 流程：每条群消息连同它前面 MODERATION_CONTEXT_MESSAGES 条上下文交给 decider，
  * 一次问三个问题（撤回 / 禁言 / 回复）；三个操作各自独立、按各自阈值触发、无优先级，
  * 一条消息可同时命中多项，执行顺序为 撤回 → 禁言 → 回复，每项完成后 @ 对方发一条固定文本。
  *
@@ -12,19 +12,19 @@
  * - 前提是机器人本身为该群群主/管理员：首次用 get_group_member_info 确认并缓存身份，
  *   动作返回 retcode 1401 表示缓存身份过期，丢弃缓存、下条消息重查；
  * - 撤回/禁言失败时不发固定文本（不谎报已处理）；
- * - 依赖可缺省的 Judge（未配置 jev 时模块不生效）；power 为管理员 /启动 /停止 的持久化开关。
+ * - 依赖可缺省的 Decider（未配置 decider 时模块不生效）；power 为管理员 /启动 /停止 的持久化开关。
  */
-import { noul, type EntryType, type Questions } from "@typesafe-ai/sdk";
+import { noul, type DeciderQuestions, type DeciderState } from "../decider/questions.js";
 
 import { config } from "../config.js";
-import type { Judge } from "../jev/judge.js";
+import type { Decider } from "../decider/client.js";
 import { logger } from "../logger.js";
 import type { NapcatClient } from "../napcat/client.js";
 import { renderSegments, textSegment, toSegments } from "../napcat/message.js";
 import type { MessageEvent, Segment } from "../napcat/types.js";
 import type { ModerationHandoff } from "./handoff.js";
 
-/** 三个管理操作名；同时用作 jev 问题名与分数键。 */
+/** 三个管理操作名；同时用作 decider 问题名与分数键。 */
 export type OpName = "recall" | "ban" | "reply";
 
 /** 单个管理操作：判定问题名、提示词、触发阈值与命中后 @ 对方发送的固定文本。 */
@@ -37,12 +37,12 @@ export type ModerationOp = {
 };
 
 /**
- * 依赖注入：只列出本模块用到的客户端能力，外加 jev 判定与可选的电源开关。
- * judge 为 undefined（未配置 TYPESAFE_API_KEY）时群管理不生效；power 关闭（管理员发 /停止）时跳过。
+ * 依赖注入：只列出本模块用到的客户端能力，外加 decider 判定与可选的电源开关。
+ * decider 为 undefined（未配置 DECIDER_API_KEY）时群管理不生效；power 关闭（管理员发 /停止）时跳过。
  */
 export type ModerationDeps = {
   client: Pick<NapcatClient, "selfId" | "sendMessage" | "callAction" | "deleteMsg" | "setGroupBan">;
-  judge: Judge | undefined;
+  decider: Decider | undefined;
   power?: { readonly on: boolean };
   // 命中一条消息后据此标记，聊天运行时查同一对象以跳过对应批次的 AI 回复；未启用该项时为 undefined。
   handoff?: ModerationHandoff;
@@ -62,14 +62,14 @@ export function selectActions(
 /** 群聊上下文的一行：说话人显示名 + 已渲染文本。 */
 type ContextLine = { from: string; text: string };
 
-/** 群管理主体：监听群消息并交给 jev 判断是否撤回/禁言/回复，与 chat/ 流程互不影响。 */
+/** 群管理主体：监听群消息并交给 decider 判断是否撤回/禁言/回复，与 chat/ 流程互不影响。 */
 export class Moderation {
   // 机器人在每个群的身份（owner/admin/member…），进程内缓存；收到 retcode 1401 时删除重查。
   private readonly roles = new Map<number, string>();
   // 每个群最近的消息上下文；appendContext 负责维持条数上限。
   private readonly context = new Map<number, ContextLine[]>();
   // 两个「只告警一次」标记，避免配置缺失时每条消息都刷日志。
-  private warnedNoJudge = false;
+  private warnedNoDecider = false;
   private warnedNoPrompt = false;
 
   constructor(private readonly deps: ModerationDeps) {}
@@ -102,16 +102,16 @@ export class Moderation {
     // 显示名优先群名片，其次昵称，最后退回 QQ 号。
     const from = event.sender?.card || event.sender?.nickname || String(event.user_id);
     const role = event.sender?.role;
-    // 群主/管理员的消息不判断，但仍进上下文，让 jev 看到完整对话。
+    // 群主/管理员的消息不判断，但仍进上下文，让 decider 看到完整对话。
     if (role === "owner" || role === "admin") {
       this.appendContext(groupId, { from, text });
       return;
     }
 
-    // 未创建 judge（TYPESAFE_API_KEY 为空）时无法判定，只告警一次。
-    if (!this.deps.judge) {
-      if (!this.warnedNoJudge) logger.warn("[moderation] 未配置 jev，群管理不生效");
-      this.warnedNoJudge = true;
+    // 未创建 decider（DECIDER_API_KEY 为空）时无法判定，只告警一次。
+    if (!this.deps.decider) {
+      if (!this.warnedNoDecider) logger.warn("[moderation] 未配置 decider，群管理不生效");
+      this.warnedNoDecider = true;
       return;
     }
 
@@ -123,40 +123,47 @@ export class Moderation {
       return;
     }
 
-    // 机器人必须是本群群主或管理员才能执行撤回/禁言，否则记错误并跳过。
-    const botRole = await this.botRole(groupId, selfId);
-    if (botRole !== "owner" && botRole !== "admin") {
-      logger.error(`[moderation] 群 ${groupId} 机器人不是管理员（role=${botRole ?? "未知"}），跳过管理`);
-      return;
-    }
-
-    // 取最近 contextMessages 条前置消息作为判定上下文。
-    const prior = (this.context.get(groupId) ?? []).slice(-config.moderation.contextMessages);
-    let scores: Record<string, number>;
+    // 从这里起会真正判定这条消息：先登记，聊天运行时在回复前会等这次判定出结果，
+    // 保证「群管理命中」能先于聊天回复被看到；无论命中与否都在 finally 里收尾。
+    this.deps.handoff?.begin(event.message_id);
     try {
-      scores = await this.deps.judge(this.state(groupId, prior, from, text), this.questions(ops));
-    } catch (error) {
-      // 判定失败时该消息照样进上下文，保证后续判断的上下文连续。
-      logger.error(`[moderation] 群 ${groupId} 消息 ${event.message_id} jev 判断失败: ${(error as Error).message}`);
-      this.appendContext(groupId, { from, text });
-      return;
-    }
-    this.appendContext(groupId, { from, text });
+      // 机器人必须是本群群主或管理员才能执行撤回/禁言，否则记错误并跳过。
+      const botRole = await this.botRole(groupId, selfId);
+      if (botRole !== "owner" && botRole !== "admin") {
+        logger.error(`[moderation] 群 ${groupId} 机器人不是管理员（role=${botRole ?? "未知"}），跳过管理`);
+        return;
+      }
 
-    // 问题名与分数键同名；缺失说明提示词与 jev 返回值对不上，按 0 处理并报错。
-    for (const op of ops) {
-      if (scores[op.name] === undefined) logger.error(`[moderation] 群 ${groupId} jev 未返回 ${op.name} 的概率，按 0 处理`);
+      // 取最近 contextMessages 条前置消息作为判定上下文。
+      const prior = (this.context.get(groupId) ?? []).slice(-config.moderation.contextMessages);
+      let scores: Record<string, number>;
+      try {
+        scores = await this.deps.decider(this.state(groupId, prior, from, text), this.questions(ops));
+      } catch (error) {
+        // 判定失败时该消息照样进上下文，保证后续判断的上下文连续。
+        logger.error(`[moderation] 群 ${groupId} 消息 ${event.message_id} decider 判断失败: ${(error as Error).message}`);
+        this.appendContext(groupId, { from, text });
+        return;
+      }
+      this.appendContext(groupId, { from, text });
+
+      // 问题名与分数键同名；缺失说明提示词与 decider 返回值对不上，按 0 处理并报错。
+      for (const op of ops) {
+        if (scores[op.name] === undefined) logger.error(`[moderation] 群 ${groupId} decider 未返回 ${op.name} 的概率，按 0 处理`);
+      }
+      // 各自独立触发，可能多项同时命中。
+      const triggered = selectActions(scores, ops);
+      // 命中即视为群管理生效：标记该消息，聊天运行时据此跳过本批 AI 回复。
+      if (triggered.length > 0) this.deps.handoff?.mark(event.message_id);
+      // detail 记录每项「分数/阈值」便于调参；hit 记录本消息实际命中的操作。
+      const detail = ops.map((op) => `${op.name}=${(scores[op.name] ?? 0).toFixed(2)}/${op.threshold}`).join(" ");
+      const hit = triggered.map((op) => op.name).join(",") || "无";
+      logger.info(`[moderation] 群 ${groupId} 用户 ${event.user_id} 消息 ${event.message_id} ${detail} -> ${hit}`);
+      // 依次执行命中项，顺序由 ops() 决定：撤回 → 禁言 → 回复。
+      for (const op of triggered) await this.act(op, event, groupId);
+    } finally {
+      this.deps.handoff?.settle(event.message_id);
     }
-    // 各自独立触发，可能多项同时命中。
-    const triggered = selectActions(scores, ops);
-    // 命中即视为群管理生效：标记该消息，聊天运行时据此跳过本批 AI 回复。
-    if (triggered.length > 0) this.deps.handoff?.mark(event.message_id);
-    // detail 记录每项「分数/阈值」便于调参；hit 记录本消息实际命中的操作。
-    const detail = ops.map((op) => `${op.name}=${(scores[op.name] ?? 0).toFixed(2)}/${op.threshold}`).join(" ");
-    const hit = triggered.map((op) => op.name).join(",") || "无";
-    logger.info(`[moderation] 群 ${groupId} 用户 ${event.user_id} 消息 ${event.message_id} ${detail} -> ${hit}`);
-    // 依次执行命中项，顺序由 ops() 决定：撤回 → 禁言 → 回复。
-    for (const op of triggered) await this.act(op, event, groupId);
   }
 
   // 返回顺序即多项命中时的执行顺序：撤回 → 禁言 → 回复；每项仍各自独立触发。
@@ -169,16 +176,16 @@ export class Moderation {
     ];
   }
 
-  /** 把各操作的提示词包装成 jev 问题；问题名与分数键一致（即 op.name）。 */
-  private questions(ops: readonly ModerationOp[]): Questions {
-    const questions: Questions = {};
+  /** 把各操作的提示词包装成 decider 问题；问题名与分数键一致（即 op.name）。 */
+  private questions(ops: readonly ModerationOp[]): DeciderQuestions {
+    const questions: DeciderQuestions = {};
     // noul() 表示「是/否」概率问题。
     for (const op of ops) questions[op.name] = noul(op.prompt);
     return questions;
   }
 
-  /** 构造 jev 判定输入：群号、当前消息、以及前置上下文。 */
-  private state(groupId: number, context: ContextLine[], from: string, text: string): EntryType {
+  /** 构造 decider 判定输入：群号、当前消息、以及前置上下文。 */
+  private state(groupId: number, context: ContextLine[], from: string, text: string): DeciderState {
     return {
       group: groupId,
       message: { from, text },

@@ -172,9 +172,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.1
         version: 1.32.1(zod@4.6.5)
-      '@typesafe-ai/sdk':
-        specifier: ^0.6.0
-        version: 0.6.0
       cron:
         specifier: ^4.4.0
         version: 4.4.0
@@ -394,10 +391,6 @@ packages:
 
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
-
-  '@typesafe-ai/sdk@0.6.0':
-    resolution: {integrity: sha512-IddX+Q0XM+VagOUZFeP7wZjaO4SHMdvnh2zEBdrZZnXedWI3BNK1lKhMx3ayrkFWvVLbVcUHJy6AVZlY+e6Jaw==}
-    engines: {node: '>=20'}
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
@@ -932,8 +925,6 @@ snapshots:
   '@types/ws@8.18.1':
     dependencies:
       '@types/node': 22.20.4
-
-  '@typesafe-ai/sdk@0.6.0': {}
 
   accepts@2.0.0:
     dependencies:

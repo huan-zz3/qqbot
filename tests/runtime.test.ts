@@ -1,9 +1,9 @@
 /**
  * runtime.test.ts —— 聊天主流程（src/chat/runtime.ts 的 ChatRuntime）集成测试。
  *
- * 用假的 judge（jev 打分）、假 client（记录发送/动作）、假 fetch（拦截 deepseek 请求并
+ * 用假的 decider（decider 打分）、假 client（记录发送/动作）、假 fetch（拦截 deepseek 请求并
  * 按队列返回模型输出）驱动真实会话逻辑，覆盖：防抖批处理、被 @ 降低门槛、白名单过滤、
- * [不回复] 跳过、表情包/图片先识图再交给 jev、私聊记忆跨会话使用、@ 名字查询与缓存、
+ * [不回复] 跳过、表情包/图片先识图再交给 decider、私聊记忆跨会话使用、@ 名字查询与缓存、
  * 搜索工具挂载条件、长回复合并转发与降级、引用消息（历史命中或 get_msg 拉取）、
  * 回复 bot 同时 @ 他人时的收件人判定等。
  *
@@ -58,7 +58,7 @@ function groupMessage(text: string, extra: Record<string, unknown>[] = [], group
 // - tools：记录每次请求携带的工具定义（undefined 表示没挂）；
 // - actions：记录 callAction 名称（get_msg / get_group_member_info / get_group_info）；
 // - replies：模型输出的预置队列，按请求顺序依次弹出；回复用完后返回空串。
-function setup(judge: Deps["judge"], replies: string[], memory?: Deps["memory"], search?: Deps["search"]) {
+function setup(decider: Deps["decider"], replies: string[], memory?: Deps["memory"], search?: Deps["search"]) {
   const sent: { target: unknown; message: unknown[] }[] = [];
   const prompts: string[] = [];
   const systems: string[] = [];
@@ -105,14 +105,14 @@ function setup(judge: Deps["judge"], replies: string[], memory?: Deps["memory"],
     },
   } as unknown as Deps["client"];
   // stickers 默认不装（需要时由用例通过私有 deps 注入替身）；返回全部记录器供断言。
-  return { runtime: new ChatRuntime({ client, judge, search, stickers: undefined, memory }), sent, prompts, systems, actions, tools, forwards };
+  return { runtime: new ChatRuntime({ client, decider, search, stickers: undefined, memory }), sent, prompts, systems, actions, tools, forwards };
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // 被 @ 时门槛降到 GATE_DIRECT_THRESHOLD（默认 0.45）：should_reply 0.5 低于群聊阈值 0.6
 // 也会回复；回复按行拆成两条消息；传给模型的聊天记录带 ★（待回应）并标注说给「你」（bot）。
-test("@bot with a modest jev score gets a reply", async () => {
+test("@bot with a modest decider score gets a reply", async () => {
   const { runtime, sent, prompts } = setup(async () => ({ should_reply: 0.5, addressed: 1 }), ["在的\n咋了"]);
   runtime.handle(groupMessage("在吗", [{ type: "at", data: { qq: String(SELF) } }]));
   await wait(2000);
@@ -159,7 +159,7 @@ test("burst of messages is judged once and quoted when others kept talking", asy
 });
 
 // 边界：被 @（addressed 0.8）只是降低门槛，最终仍看 should_reply——0.1 低于 0.45 就不发言。
-test("@bot with a bare reaction is left alone when jev says no", async () => {
+test("@bot with a bare reaction is left alone when decider says no", async () => {
   const { runtime, sent } = setup(async () => ({ should_reply: 0.1, addressed: 0.8 }), ["不该发"]);
   runtime.handle(groupMessage("哈哈哈", [{ type: "at", data: { qq: String(SELF) } }]));
   await wait(100);
@@ -167,7 +167,7 @@ test("@bot with a bare reaction is left alone when jev says no", async () => {
 });
 
 // 白名单/自过滤：非白名单群（999）与 bot 自己发出的消息（user_id === selfId）
-// 都在进入判断前被丢弃，jev 一次都不会被调用。
+// 都在进入判断前被丢弃，decider 一次都不会被调用。
 test("ignores disabled groups and the bot's own messages", async () => {
   let judged = 0;
   const { runtime, sent } = setup(async () => {
@@ -189,9 +189,9 @@ test("model can decline with the skip marker", async () => {
   assert.equal(sent.length, 0);
 });
 
-// 表情包先识图再进入判断：jev 看到的文本是 [表情包：猫猫叹气]（识图有延迟，会话会等媒体就绪）；
+// 表情包先识图再进入判断：decider 看到的文本是 [表情包：猫猫叹气]（识图有延迟，会话会等媒体就绪）；
 // 模型回复里合法编号 #3 发出对应图片段，#99 不存在被跳过，共发 2 条。
-test("stickers are described before jev sees them and can be sent back", async () => {
+test("stickers are described before decider sees them and can be sent back", async () => {
   // 收藏库替身：observe 延迟 20ms 返回描述，模拟识图耗时；list/byId/toSegment 提供发送素材。
   const described: string[] = [];
   const store = {
@@ -272,8 +272,8 @@ test("what was said in private is remembered in the group", async () => {
 });
 
 // @ 名字查询：777 首次出现时调 get_group_member_info 缓存群名片「路人甲」，
-// 之后复用缓存（整场只查一次）；jev/模型看到的文本用名字，绝不泄露 QQ 号。
-test("@ names are looked up once and shown to jev and the model", async () => {
+// 之后复用缓存（整场只查一次）；decider/模型看到的文本用名字，绝不泄露 QQ 号。
+test("@ names are looked up once and shown to decider and the model", async () => {
   const seen: string[] = [];
   const { runtime, prompts, actions } = setup(async (state) => {
     seen.push((state as { new_messages: { text: string }[] }).new_messages.map((m) => m.text).join(" | "));
@@ -294,7 +294,7 @@ test("@ names are looked up once and shown to jev and the model", async () => {
 
 // 搜索工具挂载条件 = needs_search > 0.1 且 MCP 搜索可用：
 // 0.31 达标挂 MCP 工具；0.05 不挂；不可用时哪怕 0.9 也不挂（tools[1]、tools[2] 为 undefined）。
-test("search tools are offered when jev scores it above 0.1 and the MCP server is usable", async () => {
+test("search tools are offered when decider scores it above 0.1 and the MCP server is usable", async () => {
   let usable = true;
   const scores = [0.31, 0.05, 0.9];
   const search = {
@@ -313,7 +313,7 @@ test("search tools are offered when jev scores it above 0.1 and the MCP server i
     search,
   );
   const at = { type: "at", data: { qq: String(SELF) } };
-  runtime.handle(groupMessage("你自己去搜一下jev", [at]));
+  runtime.handle(groupMessage("你自己去搜一下这个", [at]));
   await wait(200);
   runtime.handle(groupMessage("哈哈", [at]));
   await wait(200);
@@ -348,8 +348,8 @@ test("long replies are sent as one merged forward, with a plain fallback", async
   assert.equal(sent.length, 1 + 1 + 4);
 });
 
-// 普通图片同样先识图：jev 看到的文本是 [图片：手机设置页面的截图] 加原文。
-test("pictures are described before jev sees them", async () => {
+// 普通图片同样先识图：decider 看到的文本是 [图片：手机设置页面的截图] 加原文。
+test("pictures are described before decider sees them", async () => {
   const seen: string[] = [];
   const { runtime } = setup(async (state) => {
     seen.push((state as { new_messages: { text: string }[] }).new_messages[0]!.text);
@@ -420,7 +420,7 @@ test("replying to the bot while @-ing someone else is addressed to that person",
 });
 
 // 群管理优先：本批里若有消息被群管理处理过（handoff.handled 命中），整批跳过 AI 回复——
-// jev 与模型都不调用，也不发送任何消息。
+// decider 与模型都不调用，也不发送任何消息。
 test("a batch with a moderation-handled message skips the AI reply", async () => {
   let judged = 0;
   const { runtime, sent, prompts } = setup(async () => {
@@ -431,6 +431,9 @@ test("a batch with a moderation-handled message skips the AI reply", async () =>
   (runtime as unknown as { deps: { handoff: unknown } }).deps.handoff = {
     handled: (id: number) => handled.has(id),
     mark: () => undefined,
+    begin: () => undefined,
+    settle: () => undefined,
+    wait: async () => true,
   };
   const msg = groupMessage("广告消息");
   handled.add(msg.message_id); // 模拟该消息已被群管理命中
@@ -447,10 +450,40 @@ test("a batch with no moderation hit replies as usual", async () => {
   (runtime as unknown as { deps: { handoff: unknown } }).deps.handoff = {
     handled: () => false,
     mark: () => undefined,
+    begin: () => undefined,
+    settle: () => undefined,
+    wait: async () => true,
   };
   runtime.handle(groupMessage("在吗"));
   await wait(200);
   assert.equal(sent.length, 1);
+});
+
+// 群管理判定慢于聊天防抖时，聊天会先等判定出结果：等待期间命中即跳过 AI 回复。
+test("a batch waits for a slow moderation decision before replying", async () => {
+  let judged = 0;
+  const { runtime, sent } = setup(async () => {
+    judged++;
+    return { should_reply: 0.9, addressed: 0.9 };
+  }, ["不该发"]);
+  const msg = groupMessage("广告消息");
+  const handled = new Set<number>();
+  (runtime as unknown as { deps: { handoff: unknown } }).deps.handoff = {
+    handled: (id: number) => handled.has(id),
+    mark: () => undefined,
+    begin: () => undefined,
+    settle: () => undefined,
+    // 模拟群管理判定：50ms 后才出结果并命中该消息，聊天必须等它。
+    wait: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      handled.add(msg.message_id);
+      return true;
+    },
+  };
+  runtime.handle(msg);
+  await wait(200);
+  assert.equal(judged, 0);
+  assert.equal(sent.length, 0);
 });
 
 // 模型调用 opencode 且本批发言人带有文本文件时，把文件内容作为上下文前置注入 opencode 的 prompt。
@@ -593,7 +626,7 @@ test("files from other senders are not injected", async () => {
     return new Response(JSON.stringify({ choices: [{ message: { content: "看完了" } }] }), { status: 200 });
   }) as typeof fetch;
 
-  // 第一批：用户 8 只发文件，jev 说不回复（不触发 opencode）。
+  // 第一批：用户 8 只发文件，decider 说不回复（不触发 opencode）。
   runtime.handle(groupMessage("", [{ type: "file", data: { file: "机密.txt", file_id: "s1", file_size: 10 } }], 500, 8));
   await wait(200);
   // 第二批：用户 7 提问，opencode 上下文里不应包含 8 的文件内容。

@@ -97,7 +97,7 @@ export function buildSystemPrompt(ctx: ReplyContext, toolNames: string[], search
 
 /**
  * 构建 user 侧的聊天记录：每行 `[HH:mm] 说话人 → 对象：正文`，本批新消息行首标 ★。
- * 行内容用 history.formatLine 生成，格式与 jev 输入、记忆提示词保持一致。
+ * 行内容用 history.formatLine 生成，格式与 decider 输入、记忆提示词保持一致。
  */
 export function buildTranscript(ctx: ReplyContext): string {
   const title = ctx.scope === "group" ? "群聊最近的聊天记录" : "私聊最近的聊天记录";

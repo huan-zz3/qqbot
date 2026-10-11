@@ -1,5 +1,5 @@
 /**
- * runtime.ts —— 聊天运行时：会话状态机，串联「收消息 → 防抖攒批 → jev 判断 → 生成回复 → 发送 → 记忆整理」全流程。
+ * runtime.ts —— 聊天运行时：会话状态机，串联「收消息 → 防抖攒批 → decider 判断 → 生成回复 → 发送 → 记忆整理」全流程。
  *
  * 关键概念：
  * - Session：以 `group:<群号>` / `private:<QQ号>` 为 key 的会话状态，包含历史 SessionHistory、
@@ -14,7 +14,8 @@
  * 由 index.ts 组装注入，除 client 外都可能是 undefined（对应功能停用）。
  *
  * 约束/坑：
- * - 一批消息里若有被群管理（moderation）处理过的消息，整批跳过 AI 回复（deps.handoff）；消息仍进历史。
+ * - 一批消息里若有被群管理（moderation）处理过的消息，整批跳过 AI 回复（deps.handoff）；
+ *   回复前先等这批消息的群管理判定出结果，保证群管理优先于聊天回复；消息仍进历史。
  * - 图片描述、引用消息、@ 群名片是异步补全的，通过 ChatRecord.ready 汇总，process 最多等 MEDIA_WAIT_MS。
  * - 定时器回调统一写作 `void this.xxx()`；async 方法内部自行 catch，避免未处理的 Promise 拒绝。
  * - 群聊只响应 BOT_GROUPS、私聊只响应 BOT_PRIVATE_USERS 白名单；停机时完全不参与。
@@ -37,7 +38,7 @@ import {
 import type { MessageEvent, Segment } from "../napcat/types.js";
 import type { OpenCodeAgent } from "../opencode/agent.js";
 import type { McpSearch } from "../search/mcp-search.js";
-import { decide, isDirect, type GateDecision, type Judge } from "./gate.js";
+import { decide, isDirect, type GateDecision, type Decider } from "./gate.js";
 import type { FileRef, FileStore } from "./files.js";
 import { SessionHistory, formatLine, type ChatRecord, type Quote, type Scope } from "./history.js";
 import type { ImageDescriber } from "./images.js";
@@ -65,12 +66,12 @@ type Session = {
 
 /**
  * 运行时依赖：由 index.ts 组装注入。
- * 除 client 外均可选：judge 缺失时 gate 用规则兜底；search/stickers/images/memory 缺失时对应功能停用；
+ * 除 client 外均可选：decider 缺失时 gate 用规则兜底；search/stickers/images/memory 缺失时对应功能停用；
  * power 缺失时视为始终运行（没有开关可切）。
  */
 export type RuntimeDeps = {
   client: Pick<NapcatClient, "selfId" | "sendMessage" | "sendForward" | "callAction">; // NapCat 客户端能力集
-  judge: Judge | undefined; // jev 判定器；未配置 TYPESAFE_API_KEY 时为 undefined
+  decider: Decider | undefined; // decider 判定器；未配置 DECIDER_API_KEY 时为 undefined
   search: McpSearch | undefined; // MCP 联网搜索
   opencode: OpenCodeAgent | undefined; // 只读 OpenCode（ACP）能力
   stickers: StickerStore | undefined; // 表情包收藏
@@ -387,6 +388,11 @@ export class ChatRuntime {
     const pending = session.pending.splice(0);
     session.firstPendingAt = undefined;
     try {
+      // 群管理优先：先等本批消息的群管理判定出结果，再决定是否回复，避免「群管理命中、聊天却抢先说话」。
+      const pendingIds = pending.map((record) => record.messageId).filter((id): id is number => id !== undefined);
+      if (this.deps.handoff && !(await this.deps.handoff.wait(pendingIds))) {
+        logger.warn(`[chat] ${session.key} 等待群管理判定超时，按未命中继续 :: ${summarize(pending)}`);
+      }
       // 本批若已有消息被群管理处理，整批跳过 AI 回复（群管理优先）；消息仍留在历史里供后续上下文。
       if (pending.some((record) => record.messageId !== undefined && this.deps.handoff?.handled(record.messageId))) {
         logger.info(`[chat] ${session.key} 本批已被群管理处理，跳过 AI 回复 :: ${summarize(pending)}`);
@@ -411,7 +417,7 @@ export class ChatRuntime {
           presence: session.history.presence(config.gate.presenceWindowMs, now), // 最近窗口内的活跃度
           now,
         },
-        this.deps.judge,
+        this.deps.decider,
       );
       // 每次判断都记日志：决定与来源、分数、消息摘要，便于调阈值。
       logger.info(`[gate] ${session.key} ${formatDecision(decision)} :: ${summarize(pending)}`);

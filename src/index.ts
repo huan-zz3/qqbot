@@ -1,12 +1,12 @@
 /**
  * index.ts —— 进程入口：装配依赖、接线事件、处理退出
  *
- * 流程：校验必需配置（缺 DeepSeek key 直接退出）→ 按配置创建各组件（jev 判定、
+ * 流程：校验必需配置（缺 DeepSeek key 直接退出）→ 按配置创建各组件（decider 判定、
  * MCP 搜索、只读 OpenCode、表情包、图片识图、记忆、电源开关）→ 建 WS 客户端，把消息事件
  * 分发给聊天运行时与群管理 → 注册 SIGINT/SIGTERM 优雅退出（先落盘再断开）。
  *
  * 组件按需创建：配置关闭或初始化失败时对应依赖为 undefined，各模块自行降级
- * （例如无 jev 时 gate 走兜底判定、搜索不可用时不给模型挂搜索工具）。
+ * （例如无 decider 时 gate 走兜底判定、搜索不可用时不给模型挂搜索工具）。
  */
 import { statSync } from "node:fs";
 import { isAbsolute } from "node:path";
@@ -18,7 +18,7 @@ import { ImageDescriber, describeImageWith } from "./chat/images.js";
 import { MemoryStore } from "./chat/memory.js";
 import { PowerSwitch } from "./chat/power.js";
 import { StickerStore, describeSticker } from "./chat/stickers.js";
-import { createJevJudge } from "./jev/judge.js";
+import { createDecider } from "./decider/client.js";
 import { DEEPSEEK_MODEL, completeJson, describeImage } from "./llm/deepseek.js";
 import { logger } from "./logger.js";
 import { ModerationHandoff } from "./moderation/handoff.js";
@@ -31,7 +31,7 @@ import { ScheduledMessenger } from "./schedule/scheduler.js";
 import { McpSearch } from "./search/mcp-search.js";
 
 async function main(): Promise<void> {
-  // 最早安装代理：让后续所有 fetch（含 jev SDK）都走 PROXY_URL；留空则直连。
+  // 最早安装代理：让后续所有 fetch（含 decider）都走 PROXY_URL；留空则直连。
   const proxyOn = installProxy(config.proxy.url);
 
   // 没有 DeepSeek key 无法回话，直接以非零码退出。
@@ -40,9 +40,17 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // jev 是可选组件：没有 key 时为 undefined，后续 gate 走无 jev 的兜底路径。
-  const judge = config.jev.apiKey ? createJevJudge() : undefined;
-  if (!judge) logger.warn("未设置 TYPESAFE_API_KEY：jev 不可用，只在私聊、@、回复、点名时发言");
+  // decider 是可选组件：apiUrl/apiKey/model 三项都配齐才创建，否则为 undefined，后续 gate 走无 decider 的兜底路径。
+  // 缺哪项就在告警里点名，绝不静默停用。
+  const missingDecider = [
+    !config.decider.apiUrl && "DECIDER_API_URL",
+    !config.decider.apiKey && "DECIDER_API_KEY",
+    !config.decider.model && "DECIDER_MODEL",
+  ]
+    .filter(Boolean)
+    .join("/");
+  const decider = missingDecider ? undefined : createDecider();
+  if (missingDecider) logger.warn(`未配置 ${missingDecider}：decider 不可用，只在私聊、@、回复、点名时发言`);
 
   // 联网搜索：启动时连一次远程 MCP 服务器并拉取工具清单；失败只告警不阻止启动，搜索停用。
   let search: McpSearch | undefined;
@@ -98,9 +106,9 @@ async function main(): Promise<void> {
   // runtime/moderation 先声明再赋值：构造 client 时的事件回调闭包会引用它们。
   let runtime: ChatRuntime | undefined;
   let moderation: Moderation | undefined;
-  // 群管理命中后跳过 AI 回复的共享信号；未启用群管理、关了开关或没有 jev 时为 undefined。
+  // 群管理命中后跳过 AI 回复的共享信号；未启用群管理、关了开关或没有 decider 时为 undefined。
   const handoff =
-    judge && config.moderation.enabled && config.moderation.skipReply ? new ModerationHandoff() : undefined;
+    decider && config.moderation.enabled && config.moderation.skipReply ? new ModerationHandoff() : undefined;
   const client = new NapcatClient((event) => {
     // 非消息事件（心跳、通知等）不处理。
     if (!isMessageEvent(event)) return;
@@ -113,11 +121,11 @@ async function main(): Promise<void> {
   const files = config.files.enabled
     ? new FileStore(callAction, config.files.maxBytes, config.files.maxChars)
     : undefined;
-  runtime = new ChatRuntime({ client, judge, search, opencode, stickers, images, files, memory, power, handoff });
-  // 群管理依赖 jev；启用了却没有 jev 时明确告警，而不是静默失效。
+  runtime = new ChatRuntime({ client, decider, search, opencode, stickers, images, files, memory, power, handoff });
+  // 群管理依赖 decider；启用了却没有 decider 时明确告警，而不是静默失效。
   if (config.moderation.enabled) {
-    if (judge) moderation = new Moderation({ client, judge, power, handoff });
-    else logger.warn("启用了群管理（MODERATION_ENABLED）但没有 jev，群管理不生效");
+    if (decider) moderation = new Moderation({ client, decider, power, handoff });
+    else logger.warn("启用了群管理（MODERATION_ENABLED）但没有 decider，群管理不生效");
   }
 
   // 定时群发：按 cron（固定 Asia/Shanghai）向指定群发一条固定文本；受 /启动 /停止 约束。
@@ -156,7 +164,7 @@ async function main(): Promise<void> {
   const groups = [...config.bot.groups].join(",") || "（无）";
   const privateUsers = [...config.bot.privateUsers].join(",") || "（无）";
   logger.info(
-    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? config.decider.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();

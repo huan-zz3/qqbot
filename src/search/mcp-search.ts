@@ -17,6 +17,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+import { errorText } from "../errors.js";
 import type { Tool } from "../llm/deepseek.js";
 import { logger } from "../logger.js";
 
@@ -51,20 +52,6 @@ export function contentToText(content: unknown): string {
     if (item?.type === "text" && typeof item.text === "string") texts.push(item.text);
   }
   return texts.join("\n");
-}
-
-/**
- * 提取错误信息，并带上 undici `fetch failed` 藏在 cause 里的真实原因（code/message），
- * 否则日志里只剩笼统的 `fetch failed`，无法排查。
- */
-function errorText(error: unknown): string {
-  const cause = (error as { cause?: unknown } | undefined)?.cause as
-    | { code?: string; message?: string }
-    | undefined;
-  const base = error instanceof Error ? error.message : String(error);
-  if (!cause) return base;
-  const detail = cause.code ? `${cause.code}: ${cause.message ?? ""}`.trim() : cause.message;
-  return detail ? `${base}（${detail}）` : base;
 }
 
 /**

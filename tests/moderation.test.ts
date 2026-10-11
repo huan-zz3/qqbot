@@ -5,7 +5,7 @@
  * 1. selectActions()：三个操作（撤回 recall / 禁言 ban / 回复 reply）各自只看自己的
  *    分数与阈值，独立触发、互不影响；
  * 2. Moderation.handle() 的完整流程：命中后执行对应 OneBot 动作并 @ 对方发固定文本，
- *    以及电源开关、群白名单、管理员/群主豁免、jev 失败、1401 权限失效后重查身份、
+ *    以及电源开关、群白名单、管理员/群主豁免、decider 失败、1401 权限失效后重查身份、
  *    机器人自身群角色（member/admin）等边界。
  *
  * 注意：config.ts 在 import 时就把 process.env 读进 config 常量（先设置、后动态 import）。
@@ -94,8 +94,8 @@ function setup(options: { role?: string } = {}) {
   return { client, actions, sent, setBanFails: (value: boolean) => (banFails = value) };
 }
 
-// 最小依赖对象：power.on 模拟 /启动 /停止 开关，judge 模拟 jev 打分函数。
-const deps = (client: unknown, judge: unknown, on = true) => ({ client, judge, power: { on } });
+// 最小依赖对象：power.on 模拟 /启动 /停止 开关，decider 模拟 decider 打分函数。
+const deps = (client: unknown, decider: unknown, on = true) => ({ client, decider, power: { on } });
 // 固定回复的消息段为 [at 对方, 空格文本, 固定文本]，故固定文本在第 3 个（下标 2）段。
 const replyText = (message: unknown[]) => (message as { data: { text?: string } }[])[2]!.data.text;
 
@@ -114,8 +114,8 @@ test("selectActions fires every op over its own threshold, independently", () =>
 // 各发一条自己的固定文本（顺序由源码里操作定义的顺序决定）。
 test("multiple ops fire independently and each sends its own reply", async () => {
   const { client, actions, sent } = setup();
-  const judge = async () => ({ recall: 0.9, ban: 0.95, reply: 0.9 });
-  const moderation = new Moderation(deps(client, judge));
+  const decider = async () => ({ recall: 0.9, ban: 0.95, reply: 0.9 });
+  const moderation = new Moderation(deps(client, decider));
   moderation.handle(groupMessage("广告消息"));
   await wait(100);
   assert.equal(actions.filter((item) => item.action === "delete_msg").length, 1);
@@ -130,8 +130,8 @@ test("multiple ops fire independently and each sends its own reply", async () =>
 // 期望：delete_msg 撤回的正是触发消息；随后 @ 发送者（qq=7）发固定文本「已撤回」。
 test("recall: message deleted then sender mentioned", async () => {
   const { client, actions, sent } = setup();
-  const judge = async () => ({ recall: 0.9, ban: 0.1, reply: 0.1 });
-  const moderation = new Moderation(deps(client, judge));
+  const decider = async () => ({ recall: 0.9, ban: 0.1, reply: 0.1 });
+  const moderation = new Moderation(deps(client, decider));
   const msg = groupMessage("广告消息");
   moderation.handle(msg);
   await wait(50);
@@ -148,8 +148,8 @@ test("recall: message deleted then sender mentioned", async () => {
 // （600 来自 MODERATION_BAN_SECONDS），随后发固定文本「已禁言」。
 test("ban: set_group_ban with the configured seconds then sender mentioned", async () => {
   const { client, actions, sent } = setup();
-  const judge = async () => ({ recall: 0.1, ban: 0.95, reply: 0.1 });
-  const moderation = new Moderation(deps(client, judge));
+  const decider = async () => ({ recall: 0.1, ban: 0.95, reply: 0.1 });
+  const moderation = new Moderation(deps(client, decider));
   moderation.handle(groupMessage("广告消息"));
   await wait(50);
   assert.deepEqual(actions.find((item) => item.action === "set_group_ban")?.params, {
@@ -163,8 +163,8 @@ test("ban: set_group_ban with the configured seconds then sender mentioned", asy
 // 只有回复达标：不得产生任何撤回或禁言动作，只 @ 发送者发固定文本「请注意言辞」。
 test("reply: only the fixed reply is sent", async () => {
   const { client, actions, sent } = setup();
-  const judge = async () => ({ recall: 0.1, ban: 0.1, reply: 0.9 });
-  const moderation = new Moderation(deps(client, judge));
+  const decider = async () => ({ recall: 0.1, ban: 0.1, reply: 0.9 });
+  const moderation = new Moderation(deps(client, decider));
   moderation.handle(groupMessage("提醒一下"));
   await wait(50);
   assert.equal(actions.filter((item) => item.action === "delete_msg").length, 0);
@@ -175,23 +175,23 @@ test("reply: only the fixed reply is sent", async () => {
 // 边界：电源开关关闭（模拟管理员 /停止）时，即使分数全高、群也在白名单内也一律不动。
 test("power off: nothing happens", async () => {
   const { client, actions, sent } = setup();
-  const judge = async () => ({ recall: 0.9 });
-  const moderation = new Moderation(deps(client, judge, false));
+  const decider = async () => ({ recall: 0.9 });
+  const moderation = new Moderation(deps(client, decider, false));
   moderation.handle(groupMessage("广告消息"));
   await wait(50);
   assert.equal(actions.length, 0);
   assert.equal(sent.length, 0);
 });
 
-// 边界：消息来自未列入 MODERATION_GROUPS 的群（999）时，连 jev 都不会调用。
+// 边界：消息来自未列入 MODERATION_GROUPS 的群（999）时，连 decider 都不会调用。
 test("groups outside the list are ignored", async () => {
   const { client, actions, sent } = setup();
   let judged = 0;
-  const judge = async () => {
+  const decider = async () => {
     judged++;
     return { recall: 0.9 };
   };
-  const moderation = new Moderation(deps(client, judge));
+  const moderation = new Moderation(deps(client, decider));
   moderation.handle(groupMessage("广告消息", { groupId: 999 }));
   await wait(50);
   assert.equal(judged, 0);
@@ -199,16 +199,16 @@ test("groups outside the list are ignored", async () => {
   assert.equal(sent.length, 0);
 });
 
-// 边界：发送者本身是群管理员/群主时豁免——不交给 jev 判断，也不产生任何动作
+// 边界：发送者本身是群管理员/群主时豁免——不交给 decider 判断，也不产生任何动作
 // （owner 与 admin 同路处理，这里用 admin 覆盖）。
 test("admin/owner senders are not judged", async () => {
   const { client, actions, sent } = setup();
   let judged = 0;
-  const judge = async () => {
+  const decider = async () => {
     judged++;
     return { recall: 0.9 };
   };
-  const moderation = new Moderation(deps(client, judge));
+  const moderation = new Moderation(deps(client, decider));
   moderation.handle(groupMessage("广告消息", { role: "admin" }));
   await wait(50);
   assert.equal(judged, 0);
@@ -216,13 +216,13 @@ test("admin/owner senders are not judged", async () => {
   assert.equal(sent.length, 0);
 });
 
-// 边界：jev 抛错时整个流程静默放弃——无撤回、无固定文本，也不向外抛异常。
-test("a jev failure takes no action and does not crash", async () => {
+// 边界：decider 抛错时整个流程静默放弃——无撤回、无固定文本，也不向外抛异常。
+test("a decider failure takes no action and does not crash", async () => {
   const { client, actions, sent } = setup();
-  const judge = async () => {
+  const decider = async () => {
     throw new Error("boom");
   };
-  const moderation = new Moderation(deps(client, judge));
+  const moderation = new Moderation(deps(client, decider));
   moderation.handle(groupMessage("广告消息"));
   await wait(50);
   assert.equal(actions.filter((item) => item.action === "delete_msg").length, 0);
@@ -233,8 +233,8 @@ test("a jev failure takes no action and does not crash", async () => {
 // 同时丢弃缓存的机器人角色，使下一条消息重新调 get_group_member_info 确认身份。
 test("a 1401 ban failure sends no reply and forces a role recheck", async () => {
   const { client, actions, sent, setBanFails } = setup();
-  const judge = async () => ({ recall: 0.1, ban: 0.95, reply: 0.1 });
-  const moderation = new Moderation(deps(client, judge));
+  const decider = async () => ({ recall: 0.1, ban: 0.95, reply: 0.1 });
+  const moderation = new Moderation(deps(client, decider));
   const roleCalls = () => actions.filter((item) => item.action === "get_group_member_info").length;
 
   setBanFails(true);
@@ -254,17 +254,17 @@ test("a 1401 ban failure sends no reply and forces a role recheck", async () => 
 // 边界：机器人自身在群里的角色决定群管理是否生效——
 // member（非管理员）时静默跳过；admin 时正常撤回并回复。
 test("bot role gates moderation: member does nothing, admin proceeds", async () => {
-  const judge = async () => ({ recall: 0.9, ban: 0.1, reply: 0.1 });
+  const decider = async () => ({ recall: 0.9, ban: 0.1, reply: 0.1 });
 
   const member = setup({ role: "member" });
-  const memberModeration = new Moderation(deps(member.client, judge));
+  const memberModeration = new Moderation(deps(member.client, decider));
   memberModeration.handle(groupMessage("广告消息"));
   await wait(50);
   assert.equal(member.sent.length, 0);
   assert.equal(member.actions.filter((item) => item.action === "delete_msg").length, 0);
 
   const admin = setup({ role: "admin" });
-  const adminModeration = new Moderation(deps(admin.client, judge));
+  const adminModeration = new Moderation(deps(admin.client, decider));
   adminModeration.handle(groupMessage("广告消息"));
   await wait(50);
   assert.equal(admin.sent.length, 1);
@@ -274,10 +274,10 @@ test("bot role gates moderation: member does nothing, admin proceeds", async () 
 // handoff：命中任一操作即用该消息的 message_id 标记，供聊天运行时跳过对应批次的 AI 回复。
 test("a triggered op marks the message id via handoff", async () => {
   const marked: number[] = [];
-  const handoff = { mark: (id: number) => marked.push(id), handled: () => false };
+  const handoff = { mark: (id: number) => marked.push(id), handled: () => false, begin: () => undefined, settle: () => undefined };
   const { client } = setup();
-  const judge = async () => ({ recall: 0.9, ban: 0.1, reply: 0.1 });
-  const moderation = new Moderation({ ...deps(client, judge), handoff });
+  const decider = async () => ({ recall: 0.9, ban: 0.1, reply: 0.1 });
+  const moderation = new Moderation({ ...deps(client, decider), handoff });
   const msg = groupMessage("广告消息");
   moderation.handle(msg);
   await wait(50);
@@ -287,10 +287,10 @@ test("a triggered op marks the message id via handoff", async () => {
 // handoff：三项都没命中（分数全低于阈值）时不标记，聊天照常走 AI 回复。
 test("no triggered op leaves the message unmarked", async () => {
   const marked: number[] = [];
-  const handoff = { mark: (id: number) => marked.push(id), handled: () => false };
+  const handoff = { mark: (id: number) => marked.push(id), handled: () => false, begin: () => undefined, settle: () => undefined };
   const { client } = setup();
-  const judge = async () => ({ recall: 0.1, ban: 0.1, reply: 0.1 });
-  const moderation = new Moderation({ ...deps(client, judge), handoff });
+  const decider = async () => ({ recall: 0.1, ban: 0.1, reply: 0.1 });
+  const moderation = new Moderation({ ...deps(client, decider), handoff });
   moderation.handle(groupMessage("普通消息"));
   await wait(50);
   assert.deepEqual(marked, []);
@@ -299,10 +299,10 @@ test("no triggered op leaves the message unmarked", async () => {
 // handoff：电源开关关闭时不判断也不标记。
 test("power off does not mark the message", async () => {
   const marked: number[] = [];
-  const handoff = { mark: (id: number) => marked.push(id), handled: () => false };
+  const handoff = { mark: (id: number) => marked.push(id), handled: () => false, begin: () => undefined, settle: () => undefined };
   const { client } = setup();
-  const judge = async () => ({ recall: 0.9 });
-  const moderation = new Moderation({ ...deps(client, judge, false), handoff });
+  const decider = async () => ({ recall: 0.9 });
+  const moderation = new Moderation({ ...deps(client, decider, false), handoff });
   moderation.handle(groupMessage("广告消息"));
   await wait(50);
   assert.deepEqual(marked, []);

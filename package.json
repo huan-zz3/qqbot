@@ -2,7 +2,7 @@
   "name": "qqbot",
   "private": true,
   "version": "0.1.0",
-  "description": "QQ chat bot on NapCat: jev decides when to speak, deepseek-flash decides what to say",
+  "description": "QQ chat bot on NapCat: decider decides when to speak, deepseek-flash decides what to say",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -25,7 +25,6 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.7.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "@typesafe-ai/sdk": "^0.6.0",
     "cron": "^4.4.0",
     "dotenv": "^16.6.1",
     "undici": "^8.11.2",

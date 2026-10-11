@@ -72,13 +72,13 @@ test("batch learning only happens where the bot recently took part", async () =>
     sendForward: async () => nextId++,
     callAction: async () => ({ status: "ok" as const, retcode: 0, data: {} }),
   } as unknown as Deps["client"];
-  // 假 jev：文本含「@小猫」给 0.9（高于阈值触发回复），否则 0。
-  const judge = async (state: unknown) => {
+  // 假 decider：文本含「@小猫」给 0.9（高于阈值触发回复），否则 0。
+  const decider = async (state: unknown) => {
     const text = (state as { new_messages: { text: string }[] }).new_messages[0]!.text;
     return { should_reply: text.includes("@小猫") ? 0.9 : 0 };
   };
   // 组装运行时：不带搜索/表情包，注入假记忆与假判定。
-  const runtime = new ChatRuntime({ client, judge, search: undefined, stickers: undefined, memory });
+  const runtime = new ChatRuntime({ client, decider, search: undefined, stickers: undefined, memory });
 
   // 群 600（白名单内）：连发 4 条闲聊，bot 全程不发言。
   for (let i = 0; i < 4; i++) {

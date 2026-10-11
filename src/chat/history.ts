@@ -5,7 +5,7 @@
  * 是否 @ 了 bot、是否回复 bot 等元信息；可选的 quote 记录被引用的消息。
  * 对外两种消费方式：
  *   - relation / formatLine 把记录渲染成统一格式「说话人 → 对象：正文（引用 某人的「原文」）」，
- *     jev 输入、回复提示词、记忆提示词共用该格式，三处必须保持一致；
+ *     decider 输入、回复提示词、记忆提示词共用该格式，三处必须保持一致；
  *   - SessionHistory 保存有界的历史记录，供防抖判断与回复时取最近上下文。
  * 约束：records 只保留最近 maxRecords 条，但 total 累计数不随裁剪减少，
  * 因此 since(mark) 能识别标记早于当前窗口的情况；botMessageIds 用于判断
@@ -79,7 +79,7 @@ export function relation(record: ChatRecord, self: string): { to: string[]; quot
 
 /**
  * 把记录渲染成统一聊天记录行：「说话人 → 对象：正文（引用 某人的「原文」）」。
- * jev 输入、回复提示词、记忆提示词共用此格式，改动需三处同步。
+ * decider 输入、回复提示词、记忆提示词共用此格式，改动需三处同步。
  * @param record 消息记录
  * @param speaker 说话人称呼（bot 传 botName，其他人传展示名）
  * @param self bot 的自称（用于「→ 你」及引用 bot 的场合）
@@ -92,7 +92,7 @@ export function formatLine(record: ChatRecord, speaker: string, self: string): s
   return `${speaker}${arrow}：${record.text}${quote ? `（引用${quote}）` : ""}`;
 }
 
-/** 一段时间窗口内的发言统计，供 jev 判断「是否刷屏」。 */
+/** 一段时间窗口内的发言统计，供 decider 判断「是否刷屏」。 */
 export type Presence = {
   /** 窗口内 bot 发言条数。 */
   bot: number;

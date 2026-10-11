@@ -82,7 +82,7 @@ export const config = {
   // 机器人身份、白名单与状态文件。
   bot: {
     name: str("BOT_NAME", "小猫"),
-    // 群友对它的其他称呼（被叫到时 jev 能看到）。
+    // 群友对它的其他称呼（被叫到时 decider 能看到）。
     aliases: list("BOT_ALIASES"),
     // 人设，接在提示词的「你是「名字」，」后面。
     persona: str("BOT_PERSONA", DEFAULT_PERSONA),
@@ -94,7 +94,7 @@ export const config = {
     // /启动 /停止 状态的持久化位置。
     stateFile: str("BOT_STATE_FILE", "data/state.json"),
   },
-  // jev 发言判定：各场景阈值、防抖窗口与「存在感」统计窗口。
+  // decider 发言判定：各场景阈值、防抖窗口与「存在感」统计窗口。
   gate: {
     // 群聊发言阈值；调低更活跃。
     groupThreshold: num("GATE_GROUP_THRESHOLD", 0.6),
@@ -110,16 +110,20 @@ export const config = {
     directDebounceMs: num("GATE_DIRECT_DEBOUNCE_MS", 800),
     // 防抖的最长等待：消息一直不停也不能无限等。
     maxWaitMs: num("GATE_MAX_WAIT_MS", 10000),
-    // bot 最近发言次数/间隔的统计窗口，供 jev 权衡别刷屏。
+    // bot 最近发言次数/间隔的统计窗口，供 decider 权衡别刷屏。
     presenceWindowMs: num("GATE_PRESENCE_WINDOW_MS", 5 * 60 * 1000),
-    // jev 的 needs_search 分数高于它就给模型挂上联网搜索工具。
+    // decider 的 needs_search 分数高于它就给模型挂上联网搜索工具。
     searchThreshold: num("GATE_SEARCH_THRESHOLD", 0.1),
   },
-  // TypeSafe AI（jev）判定服务。
-  jev: {
-    apiKey: str("TYPESAFE_API_KEY"),
-    model: str("JEV_MODEL", "jev-latest"),
-    timeoutMs: num("JEV_TIMEOUT_MS", 5000),
+  // 通用 decider 判定服务：决定该不该发言、要不要挂联网搜索（端点/密钥/模型全部来自 .env，代码无 provider 默认值）。
+  decider: {
+    // 判定端点完整 URL；空则未配置。
+    apiUrl: str("DECIDER_API_URL"),
+    // 判定服务密钥；空则未配置。
+    apiKey: str("DECIDER_API_KEY"),
+    // 判定模型名；空则未配置。
+    model: str("DECIDER_MODEL"),
+    timeoutMs: num("DECIDER_TIMEOUT_MS", 5000),
   },
   // 回复模型（固定 deepseek-flash）。
   deepseek: {
@@ -206,7 +210,7 @@ export const config = {
   // 会话内存里的消息记录。
   history: {
     maxMessages: num("HISTORY_MAX_MESSAGES", 80),
-    // 给 jev 和模型看的最近消息条数；bot 自己的多行回复占多条记录，要留够才能看懂上下文。
+    // 给 decider 和模型看的最近消息条数；bot 自己的多行回复占多条记录，要留够才能看懂上下文。
     contextMessages: num("HISTORY_CONTEXT_MESSAGES", 40),
   },
   // 回复发送方式（分条 / 合并转发）。
@@ -218,7 +222,7 @@ export const config = {
     maxChars: num("REPLY_MAX_CHARS", 1500),
     maxParts: num("REPLY_MAX_PARTS", 40),
   },
-  // 群管理：jev 三问（撤回/禁言/回复），各自独立触发；某项提示词留空即不启用该项。
+  // 群管理：decider 三问（撤回/禁言/回复），各自独立触发；某项提示词留空即不启用该项。
   moderation: {
     enabled: bool("MODERATION_ENABLED", false),
     groups: idSet("MODERATION_GROUPS"),

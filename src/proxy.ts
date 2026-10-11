@@ -3,7 +3,7 @@
  *
  * Node 内置 fetch（undici）不会自动读取 *_proxy 环境变量，必须显式安装 dispatcher。
  * 在进程启动最早期调用一次 installProxy()，本项目所有 fetch（deepseek、MCP 搜索、
- * 图片下载）以及 jev SDK（内部用 globalThis.fetch）都会走同一个代理。
+ * 图片下载）以及 decider（内部用 globalThis.fetch）都会走同一个代理。
  * PROXY_URL 留空则不安装，保持直连。
  */
 import { ProxyAgent, setGlobalDispatcher } from "undici";

@@ -2,7 +2,7 @@
 
 # qqbot
 
-**jev 决定该不该说话，deepseek-flash 决定说什么。**
+**decider 决定该不该说话，deepseek-flash 决定说什么。**
 
 一个跑在 [NapCat](https://github.com/NapNeko/NapCatQQ) 上的 QQ 群聊机器人：会看场合接话、会发表情包、会连发几条、会联网查资料，还记得你在私聊里说过的事。
 
@@ -17,28 +17,28 @@
 
 ## 亮点
 
-- 像群友一样判断时机：新消息先攒一小批，交给 [jev](https://typesafe.ai)（TypeSafe AI 的决策模型）给出“该不该接话”的概率。被 @ 或被回复只是降低门槛，“哈哈哈”之类的收尾照样可以不回。
+- 像群友一样判断时机：新消息先攒一小批，交给 decider —— 一个通用的“判定接口”（本项目默认接 [Perplexity Decisions API](https://docs.perplexity.ai)，端点 / 密钥 / 模型都在 `.env` 里配）—— 给出“该不该接话”的概率。被 @ 或被回复只是降低门槛，“哈哈哈”之类的收尾照样可以不回。
 - 只用 deepseek-flash 说话：提示词只交代事实（QQ 不渲染 Markdown、每行是一条消息、可以选择不说），不规定长度语气，也不给示例句。
 - 表情包：自动收藏群友发的表情包，用 deepseek-flash 识图写描述；模型想发时自己挑。QQ 小黄脸按名字收发（`[doge]` 会发成真表情）。
 - 看得懂图片：普通图片也用 deepseek-flash 识图，以 `[图片：描述]` 出现在聊天记录里。
 - 连发多条，长了就合并转发：每行一条消息，按打字速度间隔发出；回复长到超过 5 行或 300 字时，正文打包成一条合并转发，不刷屏。
-- 联网搜索：jev 觉得可能需要查资料时，把一个远程 MCP 搜索服务器（多引擎搜索 + 抓取网页正文）暴露的工具挂给模型，搜不搜、抓不抓由模型决定。
+- 联网搜索：decider 觉得可能需要查资料时，把一个远程 MCP 搜索服务器（多引擎搜索 + 抓取网页正文）暴露的工具挂给模型，搜不搜、抓不抓由模型决定。
 - 只读问代码（可选）：让模型在固定的代码仓库里检索、阅读并回答问题（`opencode acp`）。权限请求一律拒绝，不能改文件、跑命令。
 - 长期记忆：按人记住聊过的事，群聊和私聊分开记；私聊里说的，到群里它也知道，提不提由它自己判断。
 - @ 显示名字：被 @ 的人显示群名片，不会把 QQ 号念出来；它回复里写的 `@名字` 会发成真正的 @。
-- 分得清谁在对谁说：聊天记录写成 `说话人 → 对象：正文（引用 某人的「原文」）`，对象来自 @、再退到被引用消息的作者；jev 的输入里也有 `to` / `quoting`。回复机器人的消息却在 @ 别人，就是在跟那个人说。
+- 分得清谁在对谁说：聊天记录写成 `说话人 → 对象：正文（引用 某人的「原文」）`，对象来自 @、再退到被引用消息的作者；decider 的输入里也有 `to` / `quoting`。回复机器人的消息却在 @ 别人，就是在跟那个人说。
 - 不复读结尾：同一个结尾 emoji / 小黄脸在它最近几条里已经用了两次，这次就去掉。
 
 ## 工作原理
 
 ```
-NapCat ──WS──> 收消息 ──防抖合并──> jev 判断 ──是──> deepseek-flash 生成 ──> 分条发送 / 合并转发
+NapCat ──WS──> 收消息 ──防抖合并──> decider 判断 ──是──> deepseek-flash 生成 ──> 分条发送 / 合并转发
                  │                   │                  │
                  ├─图片/表情包─> 识图   └─否─> 不发言       ├─needs_search > 0.1 ─> 挂上 MCP 搜索工具
                  └─@某人─> 查群名片                        └─提示词带上相关的人的长期记忆
 ```
 
-每一批新消息，jev 回答三个是非题（概率 0–1）：
+每一批新消息，decider 回答三个是非题（概率 0–1）：
 
 | 问题 | 用途 |
 | --- | --- |
@@ -46,7 +46,7 @@ NapCat ──WS──> 收消息 ──防抖合并──> jev 判断 ──是�
 | `addressed` | 是不是在跟机器人说话，记录在日志里便于调参 |
 | `needs_search` | 高于 0.1 就给模型挂上 MCP 搜索工具（前提是 MCP 服务器可用） |
 
-机器人最近 5 分钟发了多少言、距上次发言多久，也一起放进 jev 的输入里，让它自己权衡别刷屏，代码里没有硬性冷却。jev 不可用时退化为：私聊、被 @、被回复、被点名才回复，纯反应消息不回。
+机器人最近 5 分钟发了多少言、距上次发言多久，也一起放进 decider 的输入里，让它自己权衡别刷屏，代码里没有硬性冷却。decider 不可用时退化为：私聊、被 @、被回复、被点名才回复，纯反应消息不回。
 
 ## 快速开始
 
@@ -55,7 +55,7 @@ NapCat ──WS──> 收消息 ──防抖合并──> jev 判断 ──是�
 - Node.js ≥ 22、pnpm
 - 一个已登录的 NapCat（推荐 [NapCat-Docker](https://github.com/NapNeko/NapCat-Docker)）
 - [DeepSeek API key](https://platform.deepseek.com/)
-- [TypeSafe API key](https://typesafe.ai)（jev）
+- [Perplexity API key](https://console.perplexity.ai)（decider，可选）
 
 ### 1. 在 NapCat 里开 WebSocket 服务端
 
@@ -97,7 +97,9 @@ cp .env.example .env
 ```ini
 NAPCAT_TOKEN=和 NapCat 里一致
 DEEPSEEK_API_KEY=sk-...
-TYPESAFE_API_KEY=...
+DECIDER_API_URL=https://api.perplexity.ai/v1/decisions
+DECIDER_MODEL=pplx-decider-v1.1-27b
+DECIDER_API_KEY=pplx-...
 BOT_NAME=机器人的名字
 BOT_GROUPS=要发言的群号,逗号分隔
 BOT_PRIVATE_USERS=允许私聊的QQ号,逗号分隔
@@ -127,7 +129,7 @@ pnpm start        # 用 node 跑 dist/index.js（开发/调试仍可用）
 ```bash
 sudo install -m 644 deploy/qqbot.service /etc/systemd/system/
 sudo systemctl enable --now qqbot
-journalctl -u qqbot -f -o cat   # 看每条消息的 jev 分数和决定
+journalctl -u qqbot -f -o cat   # 看每条消息的 decider 分数和决定
 ```
 
 ### 4. 联网搜索（可选）
@@ -162,13 +164,14 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `BOT_PERSONA` | 是群里的一个 AI 群友。 | 人设，接在“你是「名字」，”后面；写得越具体，说话越有性格 |
-| `BOT_ALIASES` | | 群友对它的其他称呼，被叫到时 jev 能看到 |
+| `BOT_ALIASES` | | 群友对它的其他称呼，被叫到时 decider 能看到 |
 | `GATE_GROUP_THRESHOLD` | 0.6 | 群聊发言阈值，调低更活跃 |
 | `GATE_PRIVATE_THRESHOLD` | 0.35 | 私聊发言阈值 |
 | `GATE_DIRECT_THRESHOLD` | 0.45 | 被 @ 或被回复时的阈值 |
 | `GATE_DIRECT_USERS` | | 名单里的 QQ 被 @ 或被回复时视同机器人自己被 @/回复，同样走 0.45 这个 direct 阈值（防抖也按 direct 处理）；逗号分隔 |
-| `HISTORY_CONTEXT_MESSAGES` | 40 | 给 jev 和模型看的最近消息条数 |
+| `HISTORY_CONTEXT_MESSAGES` | 40 | 给 decider 和模型看的最近消息条数 |
 | `GATE_SEARCH_THRESHOLD` | 0.1 | `needs_search` 高于它就挂上搜索工具 |
+| `DECIDER_API_URL` / `DECIDER_MODEL` / `DECIDER_API_KEY` | Perplexity Decisions | 通用判定接口的端点 / 模型 / 密钥；`DECIDER_API_URL` 为空即停用 decider，退回规则兜底 |
 | `OPENCODE_ENABLED` / `OPENCODE_CWD` | false / | 启用只读 OpenCode；`CWD` 是允许访问的仓库绝对路径 |
 | `OPENCODE_PROMPT` | （内置只读说明） | 提示词里给模型的 opencode 说明，用来框定「什么情况下该调用」 |
 | `OPENCODE_MODEL` | | 给 ACP 会话指定的模型（`provider/model`，如 `deepseek/deepseek-flash`）；留空用 opencode 自己的默认（可能很贵） |
@@ -199,7 +202,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 
 ## 群管理模块（可选）
 
-独立的群管理，不需要任何指令：机器人自己看群消息，把每条消息连同它前面 `MODERATION_CONTEXT_MESSAGES` 条上下文一起交给 jev，一次问三个问题（撤回 / 禁言 / 回复）。三个操作**各自独立触发、无优先级**：只要某项分数达到自己的阈值就执行该项，一条消息可同时命中多项（执行顺序为 撤回 → 禁言 → 回复），每项各自 @ 对方发一条固定文本：
+独立的群管理，不需要任何指令：机器人自己看群消息，把每条消息连同它前面 `MODERATION_CONTEXT_MESSAGES` 条上下文一起交给 decider，一次问三个问题（撤回 / 禁言 / 回复）。三个操作**各自独立触发、无优先级**：只要某项分数达到自己的阈值就执行该项，一条消息可同时命中多项（执行顺序为 撤回 → 禁言 → 回复），每项各自 @ 对方发一条固定文本：
 
 - 撤回：先 `delete_msg`，再 @ 对方发 `MODERATION_RECALL_TEXT`；
 - 禁言：先 `set_group_ban` 对方 `MODERATION_BAN_SECONDS` 秒，再 @ 对方发 `MODERATION_BAN_TEXT`；
@@ -225,7 +228,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 
 ## 定时群发（可选）
 
-按一条 cron 表达式，在到点时向一组指定的群各发一条**固定的纯文本**消息，不需要任何指令。它与聊天流程完全独立：不经过 jev / DeepSeek，也不写入会话历史或长期记忆。
+按一条 cron 表达式，在到点时向一组指定的群各发一条**固定的纯文本**消息，不需要任何指令。它与聊天流程完全独立：不经过 decider / DeepSeek，也不写入会话历史或长期记忆。
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
@@ -253,7 +256,7 @@ src/
 │   └── scheduler.ts      定时群发：按 cron 向指定群发固定文本
 ├── chat/
 │   ├── runtime.ts        会话：防抖、判断、回复、发送、触发记忆整理
-│   ├── gate.ts           jev 问题与阈值、无 jev 时的兜底
+│   ├── gate.ts           decider 问题与阈值、无 decider 时的兜底
 │   ├── reply.ts          提示词、输出解析（文字行 / 表情包）、分条或合并转发
 │   ├── stickers.ts       表情包收藏、识图描述、重发
 │   ├── images.ts         普通图片识图
@@ -263,8 +266,10 @@ src/
 │   ├── memory.ts         长期记忆
 │   └── history.ts        会话消息记录
 ├── moderation/
-│   └── moderation.ts     群管理：jev 三问（撤回/禁言/回复）
-├── jev/judge.ts          jev 判定客户端（聊天与群管理共用）
+│   └── moderation.ts     群管理：decider 三问（撤回/禁言/回复）
+├── decider/
+│   ├── questions.ts      判定输入/问题的类型与 noul 构造
+│   └── client.ts         通用判定请求（POST state + questions）
 ├── llm/deepseek.ts       deepseek-flash：工具循环、识图、JSON（失败重试一次）
 ├── search/               MCP 联网搜索客户端
 ├── opencode/             只读 OpenCode（ACP）：进程编排、子进程环境（代理）、模型选择、权限裁决
@@ -292,7 +297,7 @@ pnpm typecheck
 - [MaiBot](https://github.com/Mai-with-u/MaiBot)：回复时机、表情包、人物记忆的思路
 - [OvO](https://github.com/Mist-wu/OvO)：NapCat 正向 WebSocket 客户端
 - [Model Context Protocol](https://modelcontextprotocol.io)：联网搜索接入
-- [TypeSafe AI](https://typesafe.ai)：jev
+- [Perplexity](https://docs.perplexity.ai)：decider 的默认判定后端（Decisions API）
 
 ## License
 

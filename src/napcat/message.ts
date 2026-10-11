@@ -1,7 +1,7 @@
 /**
  * message.ts —— 消息段与人类可读文本的双向转换（OneBot 消息渲染/构造层）
  * 出方向（收消息）：toSegments / renderSegments / markdownToText 与 is* 系列判断，
- *   把入站段数组渲染成一行文本（聊天记录、jev/模型输入都用它），
+ *   把入站段数组渲染成一行文本（聊天记录、decider/模型输入都用它），
  *   如「@某人 你好 [doge] [图片：描述]」；未知段类型用 PLACEHOLDERS 占位。
  * 入方向（发消息）：textToSegments / facesToSegments / textSegment / replySegment，
  *   把模型输出转回消息段：@名字 → 真 @（需成员表）、[名称] → QQ 小黄脸 face 段。

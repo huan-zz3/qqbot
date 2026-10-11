@@ -46,10 +46,10 @@ const message = (type: "group" | "private", userId: number, text: string) => ({
   sender: { user_id: userId, nickname: "张三" },
 });
 
-// 主流程：fetch 桩固定返回「在」；client 记录发出的消息；judge 统计被判断次数。
+// 主流程：fetch 桩固定返回「在」；client 记录发出的消息；decider 统计被判断次数。
 // 断言点：
 // 1) 管理员 42 私聊 /停止 → power.on=false 且收到停止文案；
-// 2) 停止期间群聊/私聊消息都不调用 jev（judged=0）；
+// 2) 停止期间群聊/私聊消息都不调用 decider（judged=0）；
 // 3) 再次 /停止 → 「已经是停止状态」；
 // 4) 用同一 state.json 新建 PowerSwitch 并 load → 状态持久化为 false；
 // 5) 非管理员 7 发 /启动 无效（且 7 不在私聊白名单，消息会被直接丢弃），
@@ -70,7 +70,7 @@ test("admin /停止 and /启动 in private chat pause and resume the bot, across
     sendForward: async () => nextId++,
     callAction: async () => ({ status: "ok" as const, retcode: 0, data: {} }),
   } as unknown as Deps["client"];
-  const judge = async () => {
+  const decider = async () => {
     judged++;
     return { should_reply: 0.9 };
   };
@@ -78,14 +78,14 @@ test("admin /停止 and /启动 in private chat pause and resume the bot, across
   const file = join(await mkdtemp(join(tmpdir(), "qqbot-power-")), "state.json");
   const power = new PowerSwitch(file);
   await power.load();
-  const runtime = new ChatRuntime({ client, judge, search: undefined, stickers: undefined, memory: undefined, power });
+  const runtime = new ChatRuntime({ client, decider, search: undefined, stickers: undefined, memory: undefined, power });
 
   runtime.handle(message("private", 42, "/停止"));
   await wait(50);
   assert.equal(power.on, false);
   assert.deepEqual(sent.at(-1), { target: { userId: 42 }, text: "小猫 已停止，群聊和私聊都不再回复，发 /启动 恢复" });
 
-  // 停止后：群聊与私聊消息都不进入 jev 判断，也不产生回复。
+  // 停止后：群聊与私聊消息都不进入 decider 判断，也不产生回复。
   runtime.handle(message("group", 7, "有人吗"));
   runtime.handle(message("private", 42, "在吗"));
   await wait(100);

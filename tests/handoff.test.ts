@@ -24,3 +24,37 @@ test("entries expire after the TTL", () => {
   assert.equal(handoff.handled(1, 1000 + 59_000), true);
   assert.equal(handoff.handled(1, 1000 + 60_001), false);
 });
+
+// 等待会一直挂起，直到 begin 过的消息 settle 后才返回。
+test("wait resolves once every begun judgement settles", async () => {
+  const handoff = new ModerationHandoff();
+  handoff.begin(1);
+  handoff.begin(2);
+  let done = false;
+  const waiting = handoff.wait([1, 2]).then((ok) => {
+    done = ok;
+  });
+  // 只 settle 一个，仍应挂起。
+  handoff.settle(1);
+  await Promise.resolve();
+  assert.equal(done, false);
+  handoff.settle(2);
+  await waiting;
+  assert.equal(done, true);
+});
+
+// 没有在判定的消息（未 begin）不产生等待，立即返回 true。
+test("wait returns immediately when nothing is being judged", async () => {
+  const handoff = new ModerationHandoff();
+  assert.equal(await handoff.wait([7, 8]), true);
+  // settle 未 begin 的 id 无副作用。
+  handoff.settle(7);
+  assert.equal(await handoff.wait([7]), true);
+});
+
+// 判定迟迟不结束时不无限等待：超时返回 false（调用方据此记日志放行）。
+test("wait gives up after the timeout", async () => {
+  const handoff = new ModerationHandoff();
+  handoff.begin(1);
+  assert.equal(await handoff.wait([1], 20), false);
+});
