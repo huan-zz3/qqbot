@@ -244,6 +244,17 @@ export const config = {
       seconds: num("MODERATION_BAN_SECONDS", 600),
     },
   },
+  // 定时群发：按一条 cron（时区固定 Asia/Shanghai）在到点时向指定群各发一条固定文本；
+  // 受 /启动 /停止 电源开关约束。配置非法时启动即报错退出（见 index.ts）。
+  schedule: {
+    enabled: bool("SCHEDULE_ENABLED", false),
+    // cron 表达式，如 "0 8 * * *"（每天 08:00，Asia/Shanghai）。
+    cron: str("SCHEDULE_CRON"),
+    // 目标群号，逗号分隔。
+    groups: idSet("SCHEDULE_GROUPS"),
+    // 固定文本（纯文本，只有一条）。
+    text: str("SCHEDULE_TEXT"),
+  },
 };
 
 /** 整个配置对象的类型；需要传递配置引用时用它。 */

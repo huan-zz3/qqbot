@@ -26,6 +26,7 @@
     "@agentclientprotocol/sdk": "^1.7.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@typesafe-ai/sdk": "^0.6.0",
+    "cron": "^4.4.0",
     "dotenv": "^16.6.1",
     "undici": "^8.11.2",
     "ws": "^8.21.3"

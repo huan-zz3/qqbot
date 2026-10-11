@@ -27,6 +27,7 @@
 - 聊天记录写成 `说话人 → 对象：正文（引用 某人的「原文」）`（`history.ts` `formatLine`/`relation`）；jev 输入、回复提示词、记忆提示词必须保持同一格式。
 - 提示词只给事实，不给规则或示例句：不写长度/语气要求，不放例句（模型会照抄）（`reply.ts` `buildSystemPrompt`）。
 - 模型输出约定：`[不回复]`（`SKIP_MARKER`）表示不说；`[表情包#编号]` 单独一行发收藏表情；收到的图片显示为 `[图片：描述]`，QQ 小黄脸显示/收发按 `[名称]`（名字表在 `napcat/faces.ts`）。回复里写的 `@名字` 会发成真 @。
+- 定时群发（`src/schedule/scheduler.ts`）是**独立旁路**：不走 jev/DeepSeek，也不进会话历史/记忆；时区**写死 `Asia/Shanghai`**。`SCHEDULE_ENABLED=true` 时缺项或 cron 非法会在启动时 `process.exit(1)`（不静默不发）。到点受 `/启动` `/停止` 约束。用外部依赖 `cron`（`CronJob`）。
 
 ## 目录
 
@@ -38,6 +39,7 @@
 - `src/chat/memory.ts` 长期记忆（群/私聊分开，按 QQ 号）；`power.ts` 管理员 `/启动` `/停止`（持久化）；`history.ts` 会话消息记录。
 - `src/llm/deepseek.ts` deepseek-flash 工具循环（含工具额度用尽时的收尾指令）、识图、JSON（失败重试一次）。
 - `src/search/mcp-search.ts` MCP 联网搜索客户端（连接、工具映射、调用）；`src/cli/learn-history.ts` 历史补学。
+- `src/schedule/scheduler.ts` 定时群发（cron，固定 Asia/Shanghai，受电源开关约束）。
 - `src/opencode/` 只读 OpenCode（ACP）：`agent.ts` 进程编排、`env.ts` 子进程环境（代理）、`model.ts` 模型选择、`permission.ts` 权限裁决。
 - `deploy/` systemd unit；`scripts/build-sea.mjs` 打包单文件可执行。
 

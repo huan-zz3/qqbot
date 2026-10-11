@@ -184,6 +184,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `MEMORY_LEARN_DELAY_MS` | 10000 | 回复后等对话停下多久整理记忆 |
 | `MEMORY_LEARN_BATCH` | 30 | 未整理的消息攒够这么多就整理（仅限它最近 30 分钟说过话的会话） |
 | `PROXY_URL` | | 填 HTTP 代理地址（如 `http://127.0.0.1:7890`）则所有联网请求都走它；留空直连 |
+| `SCHEDULE_ENABLED` / `SCHEDULE_GROUPS` | false / | 定时群发：按 `SCHEDULE_CRON` 向这些群各发一条 `SCHEDULE_TEXT` |
 
 ## 表情包与记忆
 
@@ -221,6 +222,24 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `MODERATION_BAN_PROMPT` / `_THRESHOLD` / `_TEXT` / `_SECONDS` | / 0.9 / / 600 | 禁言的提示词、阈值、固定回复文本、时长（秒） |
 | `MODERATION_REPLY_PROMPT` / `_THRESHOLD` / `_TEXT` | / 0.8 / | 回复的提示词、阈值、固定回复文本 |
 
+## 定时群发（可选）
+
+按一条 cron 表达式，在到点时向一组指定的群各发一条**固定的纯文本**消息，不需要任何指令。它与聊天流程完全独立：不经过 jev / DeepSeek，也不写入会话历史或长期记忆。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `SCHEDULE_ENABLED` | false | 是否启用定时群发 |
+| `SCHEDULE_CRON` | 空 | cron 表达式，如 `0 8 * * *`（每天 08:00） |
+| `SCHEDULE_GROUPS` | 空 | 目标群号，逗号分隔 |
+| `SCHEDULE_TEXT` | 空 | 固定文本（只有一条，纯文本，不解析 `@` / 小黄脸） |
+
+说明：
+
+- **时区固定为 `Asia/Shanghai`**，按北京时间写 cron（不开放时区配置）。
+- 受管理员 `/启动` `/停止` 约束：`/停止` 期间到点会被跳过（日志会记一条跳过信息），`/启动` 后恢复。
+- 发送复用 NapCat 客户端的串行节流（`NAPCAT_SEND_INTERVAL_MS`），多群发送不会瞬时爆发；某个群发送失败只记日志，不影响其它群。
+- `SCHEDULE_ENABLED=true` 时，`SCHEDULE_CRON` / `SCHEDULE_GROUPS` / `SCHEDULE_TEXT` 任一为空、或 cron 表达式非法，都会在**启动时报错退出**，避免静默不发。
+
 ## 项目结构
 
 ```text
@@ -229,6 +248,8 @@ src/
 ├── config.ts             环境变量
 ├── proxy.ts              网络代理（PROXY_URL）
 ├── napcat/               WS 客户端、OneBot 类型、消息段渲染、QQ 表情表
+├── schedule/
+│   └── scheduler.ts      定时群发：按 cron 向指定群发固定文本
 ├── chat/
 │   ├── runtime.ts        会话：防抖、判断、回复、发送、触发记忆整理
 │   ├── gate.ts           jev 问题与阈值、无 jev 时的兜底

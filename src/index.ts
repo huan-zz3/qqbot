@@ -27,6 +27,7 @@ import { NapcatClient } from "./napcat/client.js";
 import { isMessageEvent } from "./napcat/types.js";
 import { OpenCodeAgent } from "./opencode/agent.js";
 import { installProxy } from "./proxy.js";
+import { ScheduledMessenger } from "./schedule/scheduler.js";
 import { McpSearch } from "./search/mcp-search.js";
 
 async function main(): Promise<void> {
@@ -94,13 +95,6 @@ async function main(): Promise<void> {
   const power = new PowerSwitch(config.bot.stateFile);
   await power.load();
 
-  // 打印一次装配结果，方便从日志确认哪些能力处于开启状态。
-  const groups = [...config.bot.groups].join(",") || "（无）";
-  const privateUsers = [...config.bot.privateUsers].join(",") || "（无）";
-  logger.info(
-    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
-  );
-
   // runtime/moderation 先声明再赋值：构造 client 时的事件回调闭包会引用它们。
   let runtime: ChatRuntime | undefined;
   let moderation: Moderation | undefined;
@@ -125,12 +119,53 @@ async function main(): Promise<void> {
     if (judge) moderation = new Moderation({ client, judge, power, handoff });
     else logger.warn("启用了群管理（MODERATION_ENABLED）但没有 jev，群管理不生效");
   }
+
+  // 定时群发：按 cron（固定 Asia/Shanghai）向指定群发一条固定文本；受 /启动 /停止 约束。
+  // 启用时逐项校验，缺项或 cron 非法即报错退出，避免静默不发。
+  let schedule: ScheduledMessenger | undefined;
+  if (config.schedule.enabled) {
+    if (!config.schedule.cron) {
+      logger.error("SCHEDULE_ENABLED=true 但 SCHEDULE_CRON 为空");
+      process.exit(1);
+    }
+    if (config.schedule.groups.size === 0) {
+      logger.error("SCHEDULE_ENABLED=true 但 SCHEDULE_GROUPS 为空");
+      process.exit(1);
+    }
+    if (!config.schedule.text) {
+      logger.error("SCHEDULE_ENABLED=true 但 SCHEDULE_TEXT 为空");
+      process.exit(1);
+    }
+    try {
+      schedule = new ScheduledMessenger({
+        client,
+        power,
+        groups: [...config.schedule.groups],
+        cron: config.schedule.cron,
+        text: config.schedule.text,
+      });
+    } catch (error) {
+      // cron 表达式非法会在构造 CronJob 时抛出。
+      logger.error(`SCHEDULE_CRON 不是合法的 cron 表达式：${config.schedule.cron}（${(error as Error).message}）`);
+      process.exit(1);
+    }
+    schedule.start();
+  }
+
+  // 打印一次装配结果，方便从日志确认哪些能力处于开启状态。
+  const groups = [...config.bot.groups].join(",") || "（无）";
+  const privateUsers = [...config.bot.privateUsers].join(",") || "（无）";
+  logger.info(
+    `bot=${config.bot.name} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} jev=${judge ? config.jev.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+  );
+
   client.connect();
 
   // 优雅退出：先把表情包与记忆落盘（失败也继续），再断开连接退出。
   const shutdown = async () => {
     logger.info("退出中…");
     opencode?.dispose();
+    schedule?.dispose();
     await search?.dispose().catch(() => undefined);
     await stickers?.flush().catch(() => undefined);
     await memory?.flush().catch(() => undefined);
