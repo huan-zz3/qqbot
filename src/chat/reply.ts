@@ -30,7 +30,8 @@ export type ReplyContext = {
   scope: Scope;
   sessionLabel: string;
   botName: string;
-  persona: string;
+  personaIdentity: string; // 内联身份（你是谁），拼进「你是「名字」，…」这半句
+  personaRules: string; // 行为准则（必须遵守），作为独立段落注入；空则整段消失
   records: ChatRecord[]; // 聊天记录（越靠后越新）
   pending: Set<ChatRecord>; // 需要回应的一批（records 的子集，提示词里标 ★）
   stickers: { id: number; description: string }[]; // 可发的表情包清单
@@ -57,7 +58,8 @@ function clock(time: number): string {
 }
 
 /**
- * 构建 system 提示词：身份 + 场景 + 输出约定；按条件附加记忆、工具说明与表情包清单。
+ * 构建 system 提示词：身份 +（可选）独立的行为准则段落 + 场景 + 输出约定；
+ * 按条件附加记忆、工具说明与表情包清单。代码不内置性格/行为文案。
  * 只交代事实，不写长度/语气规则、不给示例句——模型会照抄示例。
  * @param toolNames 本次挂给模型的能力名（如 "opencode"）；按名追加事实说明。
  * @param searchEnabled 本次是否挂了 MCP 联网搜索工具；挂上才追加搜索/抓取的说明。
@@ -66,11 +68,18 @@ export function buildSystemPrompt(ctx: ReplyContext, toolNames: string[], search
   const now = new Date(ctx.now).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
   const scene = ctx.scope === "group" ? `QQ群「${ctx.sessionLabel}」` : `和「${ctx.sessionLabel}」的QQ私聊`;
   const lines = [
-    `你是「${ctx.botName}」，${ctx.persona}`,
-    `你在${scene}里，现在是北京时间 ${now}。怎么回、说多少、用什么语气，都由你自己判断。`,
+    // 身份句：有内联身份才跟在逗号后，否则以句号收尾。
+    ctx.personaIdentity ? `你是「${ctx.botName}」，${ctx.personaIdentity}` : `你是「${ctx.botName}」。`,
+  ];
+  if (ctx.personaRules) {
+    // 行为准则独立成段：不塞进身份句，避免被稀释。
+    lines.push("", "必须遵守的人设与行为准则：", ctx.personaRules);
+  }
+  lines.push(
+    `你在${scene}里，现在是北京时间 ${now}。`,
     "你的输出会原样发到聊天里：QQ 不渲染 Markdown，每一行会作为一条单独的消息发出。",
     `如果你觉得此刻不说话更合适，就只输出 ${SKIP_MARKER}。`,
-  ];
+  );
   if (ctx.memories.length > 0) {
     lines.push("", "你记得的关于他们的事：", ...ctx.memories.map((memory) => `- ${memory}`), "");
   }

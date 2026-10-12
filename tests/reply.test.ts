@@ -64,7 +64,8 @@ test("system prompt lists stickers without prescribing style", () => {
     scope: "group" as const,
     sessionLabel: "测试群",
     botName: "小猫",
-    persona: "是群里的一员。",
+    personaIdentity: "是群里的一员。",
+    personaRules: "",
     records: [],
     pending: new Set<never>(),
     stickers: [{ id: 3, description: "猫猫叹气" }],
@@ -72,12 +73,43 @@ test("system prompt lists stickers without prescribing style", () => {
     now: Date.now(),
   };
   const prompt = buildSystemPrompt(ctx, [], true);
+  assert.match(prompt, /你是「小猫」，是群里的一员。/);
   assert.match(prompt, /#3 猫猫叹气/);
   // 明确点出记录里的 [表情包：…] 是展示文字，避免模型照抄成正文。
   assert.match(prompt, /只是对表情的展示文字/);
   assert.match(prompt, /联网搜索/);
   assert.match(prompt, /- 李四：私聊里告诉你的：在北京工作/);
   assert.doesNotMatch(buildSystemPrompt({ ...ctx, stickers: [], memories: [] }, []), /表情包#|联网搜索|opencode|记得/);
+  // 代码不再定死「怎么回/说多少/语气由你判断」这类行为授权。
+  assert.doesNotMatch(prompt, /都由你自己判断/);
+});
+
+// 身份与准则分层：准则独立成段原样注入；身份为空时身份句以句号收尾、不产生悬挂标点；
+// 两层都空时只有身份骨架，不产生空的准则段。
+test("identity and rules render as separate layers", () => {
+  const base = {
+    scope: "group" as const,
+    sessionLabel: "测试群",
+    botName: "小猫",
+    records: [],
+    pending: new Set<never>(),
+    stickers: [],
+    memories: [],
+    now: Date.now(),
+  };
+  const rules = "必须遵守：只回答游戏问题。";
+  const withRules = buildSystemPrompt({ ...base, personaIdentity: "话不多。", personaRules: rules }, []);
+  assert.match(withRules, /你是「小猫」，话不多。/);
+  assert.match(withRules, /必须遵守的人设与行为准则：/);
+  assert.match(withRules, /只回答游戏问题。/);
+  // 身份为空：句号收尾。
+  const noIdentity = buildSystemPrompt({ ...base, personaIdentity: "", personaRules: rules }, []);
+  assert.match(noIdentity, /你是「小猫」。/);
+  assert.doesNotMatch(noIdentity, /你是「小猫」，/);
+  // 两层都空：无准则段标题。
+  const empty = buildSystemPrompt({ ...base, personaIdentity: "", personaRules: "" }, []);
+  assert.match(empty, /你是「小猫」。/);
+  assert.doesNotMatch(empty, /必须遵守的人设与行为准则/);
 });
 
 // 聊天记录格式：bot 自己的消息标注「小猫（你）」并显示 [时:分]（Asia/Shanghai，
@@ -90,7 +122,8 @@ test("transcript stars pending messages and labels the bot", () => {
     scope: "group",
     sessionLabel: "测试群",
     botName: "小猫",
-    persona: "",
+    personaIdentity: "",
+    personaRules: "",
     records: [bot, user],
     pending: new Set([user]),
     stickers: [],

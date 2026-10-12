@@ -18,7 +18,7 @@
 
 ## 容易踩的坑
 
-- **`config.ts` 在 import 时就把 `process.env` 读进 `config` 常量**（含 `dotenv.config()`）。改 env 必须在 import 之前；测试因此先在顶部 `process.env.X = ...`，再用 `await import("../src/chat/gate.js")` 动态引入被测模块（见 `tests/gate.test.ts`）。`pnpm test` 下 `NODE_TEST_CONTEXT` 被置位，故意不读本地 `.env`。**`BOT_PERSONA_FILE` 指向的人设文件同样在 import 时读取**（相对路径相对进程启动目录），读不到即抛错终止启动，不静默回退。
+- **`config.ts` 在 import 时就把 `process.env` 读进 `config` 常量**（含 `dotenv.config()`）。改 env 必须在 import 之前；测试因此先在顶部 `process.env.X = ...`，再用 `await import("../src/chat/gate.js")` 动态引入被测模块（见 `tests/gate.test.ts`）。`pnpm test` 下 `NODE_TEST_CONTEXT` 被置位，故意不读本地 `.env`。**`BOT_PERSONA_FILE` 指向的人设文件同样在 import 时读取**（相对路径相对进程启动目录），读不到即抛错终止启动，不静默回退。人设分两层：`BOT_PERSONA` 是内联身份（进回复提示词「你是「名字」，…」半句），`BOT_PERSONA_FILE` 是行为准则（作为回复提示词的**独立段落**“必须遵守的人设与行为准则”，不与身份句混写）；`config.bot.persona` 是两者合并值，**仅 decider 用**，语义与拆分前一致。代码不内置默认人设文案。
 - ESM + `NodeNext`：**import 必须带 `.js` 后缀**（`import { config } from "./config.js"`），即使源文件是 `.ts`。
 - 挂了工具时，DeepSeek 要求把前序 assistant 回合的 `reasoning_content` 原样回传，否则 400（`llm/deepseek.ts` 的 `chatWithTools`）。
 - 工具轮数**按组各自独立计数**：联网搜索（`SEARCH_MAX_TOOL_ROUNDS`）与 opencode（`OPENCODE_MAX_TOOL_ROUNDS`）各是一个工具组，某组用满只撤该组、并追加一条 user 提示告知该工具本轮起不可用，另一组不受影响；两组都用满才不再挂工具、并额外追加一条 user 收尾指令要求模型纯文本作答（该轮若模型仍返回 `tool_calls` 就不再执行、直接取其文本）。总轮数上限=两组之和，某轮同时调两组则两组各计一轮。原因：模型曾把工具调用语法（`function_calls`/`invoke`/`<|DSML|>`）当普通文本写出，被下游按行当聊天消息发了出去。
@@ -35,7 +35,7 @@
 - **累计强制回复**（`GATE_FORCE_REPLY_ENABLED`/`_GROUPS`/`_MESSAGES`）：仅对名单内的群**各自**累计「自上次发言/上次强制以来的群消息数」（`runtime.ts` 会话字段 `sinceBot`），达到条数时该群**下一批强制回复一次**——只覆盖回复结论（gate 的 `ctx.force`，来源标 `rule`），搜索建议仍来自 decider。清零点有三处：机器人发言（`recordSent`）、**强制判定作出时**（即便模型随后输出 `[不回复]`）、`/停止`（`dropPending`）。启用时群必须都在 `BOT_GROUPS` 内且条数为正，否则 `index.ts` 启动即 `process.exit(1)`（不静默失效）。仅群聊，私聊恒为 0；启动日志 `force_reply=` 列出范围与条数。
 - 聊天记录写成 `说话人 → 对象：正文（引用 某人的「原文」）`（`history.ts` `formatLine`/`relation`）；decider 输入、回复提示词、记忆提示词必须保持同一格式。
 - **上下文窗口按会话拆分，且模型与 decider 分开**（`runtime.ts` `process`）：模型窗口 = 共享最近 `HISTORY_CONTEXT_MESSAGES` 条 ∪ 本批每个不同发送者各自最近 `HISTORY_USER_CONTEXT_MESSAGES` 条，再在这两者已触及的范围（最旧选中消息 → 最新）内补齐 **bot 自己**的消息（并集去重、按时间排序，`history.ts` `SessionHistory.context`；bot 不作逐账号保证，只按 `fromBot` 在区间内补齐，补 bot 不改变窗口下界）；decider 只看自己的 `DECIDER_CONTEXT_MESSAGES` 条、**不做逐账号保证**。三条窗口都不得超过 `HISTORY_MAX_MESSAGES`（保留环），`index.ts` 启动即校验、超了 `process.exit(1)`（不静默裁剪）。**记忆学习走 `since(learnedMark)` 水位线、不受窗口影响；但 `memory.describe` 基于模型窗口，窗口变宽会多带出几位群友的记忆。** `process` 打一条 `[context]` debug 日志（各窗口条数、额外纳入条数与 `botFill`=本次 bot 补齐条数）。
-- 提示词只给事实，不给规则或示例句：不写长度/语气要求，不放例句（模型会照抄）（`reply.ts` `buildSystemPrompt`）。
+- 代码内置的提示词只给事实，不给规则或示例句：不写长度/语气要求，不放例句（模型会照抄）（`reply.ts` `buildSystemPrompt`）；用户的行为规则经 `BOT_PERSONA_FILE` 作为独立段落注入，代码不内置性格/行为文案。
 - 模型输出约定：`[不回复]`（`SKIP_MARKER`）表示不说；`[表情包#编号]` 单独一行发收藏表情；收到的图片显示为 `[图片：描述]`，QQ 小黄脸显示/收发按 `[名称]`（名字表在 `napcat/faces.ts`）。回复里写的 `@名字` 会发成真 @。
 - 定时群发（`src/schedule/scheduler.ts`）是**独立旁路**：不走 decider/DeepSeek，也不进会话历史/记忆；时区**写死 `Asia/Shanghai`**。`SCHEDULE_ENABLED=true` 时缺项或 cron 非法会在启动时 `process.exit(1)`（不静默不发）。到点受 `/启动` `/停止` 约束。用外部依赖 `cron`（`CronJob`）。
 - 定时执行本地 shell 命令（`src/exec/cron-exec.ts`）同为**独立旁路**，但**不受 `/启动` `/停止` 约束**（系统级任务）。多条命令用编号式 env：`EXEC_<n>_CRON` + `EXEC_<n>_SHELL` 成对，`config.ts` 的 `execJobs()` 扫描 `process.env` 键名、按编号升序（允许跳号），空值不丢弃、交 `index.ts` 校验；`EXEC_ENABLED=true` 时任务数为 0、成对缺一、或 cron 非法都启动即 `process.exit(1)`。时区同为 `Asia/Shanghai`；cron 工厂 `createCronJob`/`CRON_TIMEZONE` 从 `scheduler.ts` 导出共用。每条命令有重叠守卫（上一次未跑完则跳过并记日志）；只写日志，输出按 `EXEC_MAX_OUTPUT_CHARS` 截断并注明原始字符数。
@@ -44,7 +44,7 @@
 
 ## 目录
 
-- `src/index.ts` 启动、依赖组装；`src/config.ts` 环境变量（`str`/`num`/`bool`/`list`/`textFile` 助手；`textFile` 供 `BOT_PERSONA_FILE` 读追加人设）。
+- `src/index.ts` 启动、依赖组装；`src/config.ts` 环境变量（`str`/`num`/`bool`/`list`/`textFile` 助手；`textFile` 供 `BOT_PERSONA_FILE` 读行为准则）。
 - `src/napcat/` WS 客户端、OneBot 类型、消息段渲染、QQ 表情表。
 - `src/chat/gate.ts` decider 问题与阈值、无 decider 兜底、`ctx.force` 强制回复；`runtime.ts` 会话防抖/判断/回复/发送/触发记忆、`sinceBot` 累计计数。
 - `src/decider/questions.ts` 通用判定输入/问题类型与 noul 构造；`client.ts` 通用判定请求（POST state + questions，端点/密钥/模型来自 `config.decider`）。
@@ -63,5 +63,5 @@
 ## 约定
 
 - `data/` 是运行时状态（`state.json`、`memory.json`、`stickers/`），已被 `.gitignore` 忽略，**不要提交或公开**（含群友个人信息）。
-- `BOT_PERSONA_FILE` 指向的人设文件通常也含个人信息，放仓库根或 `data/` 并确保被 `.gitignore` 忽略（仓库已忽略根目录的 `PERSONA.txt`）。
+- `BOT_PERSONA_FILE` 指向的行为准则文件通常也含个人信息，放仓库根或 `data/` 并确保被 `.gitignore` 忽略（仓库已忽略根目录的 `PERSONA.txt`）。
 - 代码用 `type` 而非 `interface`；模块保持小而单一。
