@@ -11,7 +11,8 @@
  *   并且所有 session/request_permission 一律拒绝（decidePermission），因此 agent 无法
  *   执行命令或改动文件；一旦它请求 fs 能力，说明协议理解有误，直接报错而不是无声返回。
  * - 同步：run() 一直等到任务 stop 才返回，超时则取消并杀掉子进程；不保留常驻进程或会话。
- * - 串行：run() 内部排队，同一时刻只跑一个子进程（模型一轮可能并发发起多个工具调用）。
+ * - 调度：同一会话（key）串行，跨会话最多 maxConcurrency 个并发（见 opencode/scheduler.ts）；
+ *   排队时间不计入本任务超时（三道闸都在真正开始后才启动）。
  * - 不静默：任何一步失败都向上抛出（由工具层转成给模型的错误文本），并在此处留日志；
  *   子进程的 stderr 会被收集，失败时随错误信息一起暴露，便于排查。
  *
@@ -22,7 +23,7 @@
  * - 重试上限 retryMax：解析 session_info_update 的 `_meta["opencode/retry"]`，活跃重试次数超限即提前退出。
  *
  * 依赖 config.opencode（command、args、dirs、timeoutMs、idleTimeoutMs、retryMax、maxOutputChars、
- * model、inputPrefix、inputSuffix）。inputPrefix/inputSuffix 是用户自定义文本，在 execute() 里
+ * maxConcurrency、model、inputPrefix、inputSuffix）。inputPrefix/inputSuffix 是用户自定义文本，在 execute() 里
  * 包住整个 prompt（含文件上下文）后送入 acp；拼接规则见 opencode/prompt.ts。
  */
 import { spawn } from "node:child_process";
@@ -37,6 +38,7 @@ import { resolveModelValue } from "./model.js";
 import { decidePermission } from "./permission.js";
 import { composePrompt } from "./prompt.js";
 import { parseRetryNotice, retryExceeded } from "./retry.js";
+import { TaskScheduler } from "./scheduler.js";
 
 /** OpenCodeAgent 的构造参数（来自 config.opencode）。 */
 export type OpenCodeOptions = {
@@ -51,6 +53,8 @@ export type OpenCodeOptions = {
   /** 容忍的模型重试次数；opencode 上报的活跃重试 attempt 超过它即提前取消。 */
   retryMax: number;
   maxOutputChars: number;
+  /** 全局同时运行的任务数上限；同一会话始终串行，不受此值影响。 */
+  maxConcurrency: number;
   /** OPENCODE_MODEL：要指定的模型（provider/model）；留空则沿用 opencode 默认。 */
   model?: string;
   /** OPENCODE_INPUT_PREFIX：拼在送进 acp 的 prompt 之前的自定义文本；留空不拼。 */
@@ -70,12 +74,14 @@ function summarize(prompt: string): string {
  * 每次 run() 现开一个子进程，结束（正常或异常）即杀掉。
  */
 export class OpenCodeAgent {
-  // 串行队列：run() 依次排队，保证同一时刻只有一个子进程。
-  private queue: Promise<unknown> = Promise.resolve();
-  // 当前存活的子进程，供 dispose() 在进程退出时清理。
-  private child: ReturnType<typeof spawn> | undefined;
+  // 调度：同一会话串行、跨会话并发受 maxConcurrency 限制。
+  private readonly scheduler: TaskScheduler;
+  // 存活子进程集合；dispose() 兜底清场用（单个任务结束时只杀自己那个）。
+  private readonly children = new Set<ReturnType<typeof spawn>>();
 
-  constructor(private readonly options: OpenCodeOptions) {}
+  constructor(private readonly options: OpenCodeOptions) {
+    this.scheduler = new TaskScheduler(options.maxConcurrency);
+  }
 
   /**
    * 已校验的预定义仓库目录；供工具层生成短名清单（enum/description）。
@@ -85,36 +91,38 @@ export class OpenCodeAgent {
   }
 
   /**
-   * 排队执行一次只读任务。
+   * 排队执行一次只读任务：同一会话（key）串行，跨会话最多 maxConcurrency 个并发。
    * @param prompt 交给 OpenCode 的任务或问题。
    * @param directory 要进入的预定义仓库短名（必填）；未知短名会让本次调用抛错。
+   * @param key 会话键（群号 / 私聊用户号）；非空，用于按会话串行。
    * @returns 任务结束时 OpenCode 的文本答复（可能为空或已截断）；失败时抛出。
    */
-  run(prompt: string, directory: string): Promise<string> {
-    // 无论前一次成功或失败，都接着执行（失败不影响后续排队）。
-    const next = this.queue.then(
-      () => this.execute(prompt, directory),
-      () => this.execute(prompt, directory),
-    );
-    // 队列自身吞掉结果，只作为「上一个是否结束」的标记，避免未处理的拒绝。
-    this.queue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+  run(prompt: string, directory: string, key: string): Promise<string> {
+    // 记下入队时刻，真正开始时用于报告排队等待了多久（不含任务本身耗时）。
+    const queuedAt = Date.now();
+    return this.scheduler.run(key, () => this.execute(prompt, directory, key, queuedAt));
   }
 
-  /** 杀掉当前存活子进程；进程退出时调用，避免留下孤儿。 */
+  /** 杀掉当前存活的所有子进程；进程退出时调用，避免留下孤儿。 */
   dispose(): void {
-    if (this.child && !this.child.killed) this.child.kill();
-    this.child = undefined;
+    for (const child of this.children) {
+      if (!child.killed) child.kill();
+    }
+    this.children.clear();
+  }
+
+  /** 只杀某个子进程并从存活集合移除；单次任务结束时用，避免误杀其它会话的子进程。 */
+  private killChild(child: ReturnType<typeof spawn>): void {
+    if (!child.killed) child.kill();
+    this.children.delete(child);
   }
 
   /**
    * 单次任务的完整流程：spawn -> initialize -> session/new -> prompt -> stop -> 清理。
    * 所有异常都向上抛出，并带上子进程 stderr 片段便于定位。
+   * 已在调度器拿到全局槽位后才被调用，故此处 startedAt/超时均从真正开始算起（不含排队）。
    */
-  private async execute(prompt: string, directory: string): Promise<string> {
+  private async execute(prompt: string, directory: string, key: string, queuedAt: number): Promise<string> {
     const { command, args, dirs, timeoutMs, idleTimeoutMs, retryMax, maxOutputChars } = this.options;
     const cwd = resolveDir(dirs, directory);
     const startedAt = Date.now();
@@ -122,13 +130,14 @@ export class OpenCodeAgent {
     const prefix = this.options.inputPrefix ?? "";
     const suffix = this.options.inputSuffix ?? "";
     const finalPrompt = composePrompt(prefix, prompt, suffix);
+    // 开始日志带上会话键、排队等待时长与调度器当时的状态（运行/等待数含本次自身）。
     logger.info(
-      `[opencode] 开始 目录=${directory}(${cwd}) prompt=${summarize(finalPrompt)}` +
-        ` 前置=${prefix.trim().length} 后置=${suffix.trim().length} 字符`,
+      `[opencode] 开始 会话=${key} 等待=${startedAt - queuedAt}ms 运行=${this.scheduler.active} 排队=${this.scheduler.waiting} ` +
+        `目录=${directory}(${cwd}) prompt=${summarize(finalPrompt)} 前置=${prefix.trim().length} 后置=${suffix.trim().length} 字符`,
     );
 
     const child = spawn(command, args, { cwd, env: childEnv(), stdio: ["pipe", "pipe", "pipe"] });
-    this.child = child;
+    this.children.add(child);
 
     // 收集 stderr（截尾保留最近 4000 字符），失败时附到错误信息里。
     let stderr = "";
@@ -295,15 +304,15 @@ export class OpenCodeAgent {
       if (!output) output = `OpenCode 没有返回内容（stopReason=${result.stopReason}）`;
 
       logger.info(
-        `[opencode] 完成 用时=${Date.now() - startedAt}ms stop=${result.stopReason} 字符=${output.length} updates=${updateCount}`,
+        `[opencode] 完成 会话=${key} 用时=${Date.now() - startedAt}ms stop=${result.stopReason} 字符=${output.length} updates=${updateCount}`,
       );
       return output;
     } catch (error) {
       if (cancelReason) {
-        logger.warn(`[opencode] ${failReason()}，已取消`);
+        logger.warn(`[opencode] 会话=${key} ${failReason()}，已取消`);
         throw new Error(`${failReason()}${stderr ? `\n${stderr}` : ""}`);
       }
-      logger.warn(`[opencode] 任务失败: ${(error as Error).message}`);
+      logger.warn(`[opencode] 会话=${key} 任务失败: ${(error as Error).message}`);
       // 把 stderr 附到错误里（若子进程的失败信息未包含）。
       const message = (error as Error).message;
       throw stderr && !message.includes(stderr) ? new Error(`${message}\n${stderr}`) : error;
@@ -311,7 +320,8 @@ export class OpenCodeAgent {
       clearTimeout(totalTimer);
       stopIdle();
       clearTimeout(graceTimer);
-      this.dispose();
+      // 只杀自己这个子进程；其它会话的子进程不受影响（进程退出时才由 dispose() 全清）。
+      this.killChild(child);
     }
   }
 }

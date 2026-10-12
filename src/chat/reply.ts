@@ -211,11 +211,12 @@ export function planSends(parts: ReplyPart[]): Outgoing[] {
 /**
  * 构造挂给模型的 opencode 工具：把模型给的任务交给只读的 OpenCodeAgent 在**指定仓库**里执行。
  * @param agent OpenCode 客户端；其预定义目录清单用于生成 directory 参数的 enum 与描述。
+ * @param key 会话键（群号 / 私聊用户号）；透传给后端，用于按会话串行（同一会话不并发）。
  * @param context 可选的懒加载上下文（文本类文件内容）；仅在工具被真正调用时求值，与任务一并交给 OpenCode。
  * @param onStart 可选的“开始执行”通知；本次工具实例首次真正调用时触发一次（同批多次调用也只触发一次）。
  *   契约：它必须自行处理失败、不得抛出——否则会把探索流程一并中断。
  */
-export function openCodeTool(agent: OpenCodeAgent, context?: () => Promise<string>, onStart?: () => void | Promise<void>): Tool {
+export function openCodeTool(agent: OpenCodeAgent, key: string, context?: () => Promise<string>, onStart?: () => void | Promise<void>): Tool {
   // 只属于本次工具实例的标记：保证同一批只通知一次。
   let notified = false;
   // 预定义仓库短名：用于向模型列出可选目录，并在调用时校验（只允许这几个）。
@@ -260,7 +261,7 @@ export function openCodeTool(agent: OpenCodeAgent, context?: () => Promise<strin
       // 只在工具真的被调用时才取文件上下文（用到才下载）。
       const extra = context ? (await context()).trim() : "";
       if (extra) logger.info(`[opencode] 注入文件上下文 ${extra.length} 字符`);
-      return agent.run(extra ? `${extra}\n\n${prompt}` : prompt, directory);
+      return agent.run(extra ? `${extra}\n\n${prompt}` : prompt, directory, key);
     },
   };
 }
@@ -268,7 +269,8 @@ export function openCodeTool(agent: OpenCodeAgent, context?: () => Promise<strin
 /** generateReply 可用的后端：MCP 联网搜索与只读 OpenCode，均为可选。 */
 export type ReplyTools = {
   search?: McpSearch;
-  opencode?: OpenCodeAgent;
+  // 只读 OpenCode 后端与会话键成对提供：键不可能缺失（避免静默退化为跨会话共享队列）。
+  opencode?: { agent: OpenCodeAgent; key: string };
   // opencode 被调用时注入的上下文（文本类文件内容）；缺省表示没有相关文件。
   opencodeContext?: () => Promise<string>;
   // opencode 开始执行时的一次性通知（如“正在查看”）；缺省表示不发。
@@ -296,7 +298,7 @@ export async function generateReply(ctx: ReplyContext, backends: ReplyTools): Pr
     groups.push({
       name: "opencode",
       label: "opencode",
-      tools: [openCodeTool(backends.opencode, backends.opencodeContext, backends.onOpencodeStart)],
+      tools: [openCodeTool(backends.opencode.agent, backends.opencode.key, backends.opencodeContext, backends.onOpencodeStart)],
       maxRounds: config.opencode.maxToolRounds,
     });
   }

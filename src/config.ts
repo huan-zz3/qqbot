@@ -241,6 +241,8 @@ export const config = {
     retryMax: num("OPENCODE_RETRY_MAX", 2),
     // 返回文本的截断上限，避免把超长输出整段塞给模型。
     maxOutputChars: num("OPENCODE_MAX_OUTPUT_CHARS", 4000),
+    // 全局同时运行的任务数上限；同一会话始终串行，不受此值影响。必须为正整数（否则启动失败）。
+    maxConcurrency: num("OPENCODE_MAX_CONCURRENCY", 3),
     // opencode 组的工具轮数上限；与联网搜索组各自独立计数。
     maxToolRounds: num("OPENCODE_MAX_TOOL_ROUNDS", 3),
   },

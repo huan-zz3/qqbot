@@ -507,7 +507,12 @@ export class ChatRuntime {
         now: Date.now(),
         filesEnabled: this.deps.files !== undefined,
       },
-      { search, opencode: this.deps.opencode, opencodeContext, onOpencodeStart },
+      {
+        search,
+        opencode: this.deps.opencode ? { agent: this.deps.opencode, key: session.key } : undefined,
+        opencodeContext,
+        onOpencodeStart,
+      },
     );
     // 机器人最近发过的文本，用来检查是否在复读同一个结尾。
     const recentBot = records.filter((record) => record.fromBot).map((record) => record.text);
