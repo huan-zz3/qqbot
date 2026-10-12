@@ -229,6 +229,12 @@ export const config = {
     dirsRaw: str("OPENCODE_DIRS"),
     // 单次任务的总超时；超时会取消任务并杀掉子进程。
     timeoutMs: num("OPENCODE_TIMEOUT_MS", 180000),
+    // prompt 阶段允许的「无 session/update」静默时长；过久即判定 opencode 卡死并取消。
+    // 必须为正且小于 timeoutMs（否则启动即报错，避免静默失效）。
+    idleTimeoutMs: num("OPENCODE_IDLE_TIMEOUT_MS", 60000),
+    // 容忍的模型重试次数；opencode 经 _meta["opencode/retry"] 上报的活跃 attempt 超过它即提前取消。
+    // 必须为正（否则启动即报错）。
+    retryMax: num("OPENCODE_RETRY_MAX", 2),
     // 返回文本的截断上限，避免把超长输出整段塞给模型。
     maxOutputChars: num("OPENCODE_MAX_OUTPUT_CHARS", 4000),
     // opencode 组的工具轮数上限；与联网搜索组各自独立计数。

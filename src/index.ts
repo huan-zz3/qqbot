@@ -78,11 +78,24 @@ async function main(): Promise<void> {
       logger.error("OPENCODE_ENABLED=true 但未配置任何目录（OPENCODE_CWD / OPENCODE_DIRS 均为空）");
       process.exit(1);
     }
+    // 超时策略必须自洽：空闲超时要为正且短于总超时，否则它永不触发（配置无效）。
+    if (config.opencode.idleTimeoutMs <= 0 || config.opencode.idleTimeoutMs >= config.opencode.timeoutMs) {
+      logger.error(
+        `OPENCODE_IDLE_TIMEOUT_MS 必须为正且小于 OPENCODE_TIMEOUT_MS（当前 ${config.opencode.idleTimeoutMs} / ${config.opencode.timeoutMs}）`,
+      );
+      process.exit(1);
+    }
+    if (config.opencode.retryMax < 1) {
+      logger.error(`OPENCODE_RETRY_MAX 必须为正（当前 ${config.opencode.retryMax}）`);
+      process.exit(1);
+    }
     opencode = new OpenCodeAgent({
       command: config.opencode.command,
       args: config.opencode.args,
       dirs,
       timeoutMs: config.opencode.timeoutMs,
+      idleTimeoutMs: config.opencode.idleTimeoutMs,
+      retryMax: config.opencode.retryMax,
       maxOutputChars: config.opencode.maxOutputChars,
       model: config.opencode.model,
     });

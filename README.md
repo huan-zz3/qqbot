@@ -151,6 +151,8 @@ journalctl -u qqbot -f -o cat   # 看每条消息的 decider 分数和决定
 
 调用时由**模型用短名选择**要进入的仓库（工具参数 `directory` 为必填、取值限定为这些短名）；一次调用只进一个仓库。调用与否由模型自己决定；一次任务同步执行，超时会先取消再杀掉子进程。白名单内的群 / 私聊都能触发，结果发在原会话。提示词里给模型的说明可用 `OPENCODE_PROMPT` 自定义，用来框定「什么情况下该调用」。可用 `OPENCODE_NOTICE_TEXT` 在探索开始时先发一条提示（例如「正在查看，请稍等…」），留空则不发；该提示会作为一条普通消息发出并写入会话历史，因此群聊里随后的正式回复可能带上对最后一条消息的引用。
 
+**超时与卡死检测**：任务有三道闸，任一到点都先协作式取消（`$/cancel_request`），宽限 5s 未恢复再硬失败并杀子进程。① 总墙钟 `OPENCODE_TIMEOUT_MS`（默认 180s）是绝对上限；② 空闲 `OPENCODE_IDLE_TIMEOUT_MS`（默认 60s）在 prompt 阶段每收到一条 ACP `session/update` 就重置，静默过久即判定 opencode 内部卡死——这是「它一直不返回、只能干等总超时」的主要兜底（正常任务会持续产生 update 当心跳）；③ 重试 `OPENCODE_RETRY_MAX`（默认 2）：opencode 在模型调用失败并排定重试时会经 `session_info_update` 的 `_meta["opencode/retry"]` 上报 `attempt`/`nextRetryAt`/`error`，活跃重试次数超过上限即提前取消。启用时若 `OPENCODE_IDLE_TIMEOUT_MS` 不为正或不小于总超时、或 `OPENCODE_RETRY_MAX` 不为正，启动即报错退出（不静默失效）。
+
 **必须显式指定模型**：`opencode acp` 没有 `--model` 参数，也无视命令行里选中的模型，不指定就会用它自己的默认模型（可能又贵又不是你要的，且你那台机器上全局 config 写的 `DeepSeek/deepseek-v4-pro` 因 provider 大小写不匹配而没生效）。因此用 `OPENCODE_MODEL=<provider>/<model>`（如 `deepseek/deepseek-flash`）指定；bot 会在建好会话后经 ACP 的 `session/set_config_option`（`configId=model`）设置它。留空则沿用 opencode 默认（README 不推荐）。配了却不在可选模型内会在任务失败时报出可选值，不做静默回退。
 
 bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn 出的子进程拿不到，因此 spawn 时会按 `PROXY_URL` 给子进程注入 `http_proxy`/`https_proxy`/`all_proxy`，并把 `127.0.0.1`/`localhost`/`::1` 加进 `no_proxy`，避免 OpenCode 的本机内部通信被代理转发而失败。
@@ -186,6 +188,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `OPENCODE_DIRS` | | 追加的可访问仓库，每项 `短名=绝对路径`，逗号/空格分隔（路径不能含空格/逗号）；调用时模型用短名选择 |
 | `OPENCODE_PROMPT` | （内置只读说明） | 提示词里给模型的 opencode 说明，用来框定「什么情况下该调用」 |
 | `OPENCODE_MODEL` | | 给 ACP 会话指定的模型（`provider/model`，如 `deepseek/deepseek-flash`）；留空用 opencode 自己的默认（可能很贵） |
+| `OPENCODE_TIMEOUT_MS` / `OPENCODE_IDLE_TIMEOUT_MS` / `OPENCODE_RETRY_MAX` | 180000 / 60000 / 2 | 总墙钟超时 / prompt 阶段无响应空闲超时（每收一条 `session/update` 重置，静默过久判卡死）/ 容忍的模型重试次数；空闲超时须为正且小于总超时、重试上限须为正，否则启动报错退出 |
 | `OPENCODE_NOTICE_TEXT` | | opencode 开始执行时先发出的提示文本；留空则不发（会写入会话历史） |
 | `GATE_GROUP_DEBOUNCE_MS` | 3000 | 群里等消息停下多久再判断 |
 | `DEEPSEEK_THINKING` | false | deepseek-flash 的思考模式 |
