@@ -1,5 +1,5 @@
 /**
- * config.ts —— 环境变量读取，导出全项目唯一的配置常量 config
+ * config.ts —— 环境变量读取（含 BOT_PERSONA_FILE 指向的人设文件），导出全项目唯一的配置常量 config
  *
  * 重要约束（坑）：
  * - 本模块在 **import 时** 就把 process.env 读进常量（含 dotenv.config()），
@@ -8,10 +8,13 @@
  * - `node --test` 会给测试子进程置位 NODE_TEST_CONTEXT：此时故意不加载本地
  *   .env，避免测试读到开发者机器上的真实配置。
  * - dotenv 默认不覆盖已存在的环境变量。
+ * - BOT_PERSONA_FILE（可空）指向的人设文件也在 import 时读取，相对路径相对
+ *   进程启动目录；读不到直接抛错终止启动，绝不静默回退。
  *
  * 每个配置项对应一个环境变量（命名与 .env.example/README 一致），经 str/num/
- * bool/list/idSet 读取并给出默认值；默认值即「什么都不配」时的保守配置。
+ * bool/list/idSet/textFile 读取并给出默认值；默认值即「什么都不配」时的保守配置。
  */
+import { readFileSync } from "node:fs";
 import dotenv from "dotenv";
 
 // node --test 会给子进程置位 NODE_TEST_CONTEXT；此时跳过 .env，
@@ -53,8 +56,24 @@ function idSet(name: string): Set<number> {
   return new Set(list(name).map(Number).filter((id) => Number.isSafeInteger(id) && id > 0));
 }
 
+/**
+ * 读文本文件（UTF-8）并去掉首尾空白。path 为空返回空串；
+ * 读取失败直接抛错终止启动（绝不静默回退），错误信息带上变量名与原始路径以便排查。
+ */
+function textFile(path: string, source: string): string {
+  if (!path) return "";
+  try {
+    return readFileSync(path, "utf8").trim();
+  } catch (error) {
+    throw new Error(`读取 ${source} 指向的文件失败：${path}（${(error as Error).message}）`);
+  }
+}
+
 // BOT_PERSONA 未配置时的默认人设。
 const DEFAULT_PERSONA = "是群里的一个 AI 群友。";
+
+// 追加式人设文件路径（可空，支持相对进程启动目录）；内容会拼到内联人设之后，读不到即启动失败。
+const personaFile = str("BOT_PERSONA_FILE");
 
 // OPENCODE_PROMPT 未配置时给模型的 opencode 工具说明；只交代事实，不诱导使用。
 const DEFAULT_OPENCODE_PROMPT =
@@ -85,7 +104,9 @@ export const config = {
     // 群友对它的其他称呼（被叫到时 decider 能看到）。
     aliases: list("BOT_ALIASES"),
     // 人设，接在提示词的「你是「名字」，」后面。
-    persona: str("BOT_PERSONA", DEFAULT_PERSONA),
+    persona: [str("BOT_PERSONA", DEFAULT_PERSONA), textFile(personaFile, "BOT_PERSONA_FILE")].filter(Boolean).join("\n"),
+    // BOT_PERSONA_FILE 的原始路径（可空）；仅用于启动日志展示，内容已并入 persona。
+    personaFile,
     // 发言白名单：空集合 = 不在群里 / 私聊里说话。
     groups: idSet("BOT_GROUPS"),
     privateUsers: idSet("BOT_PRIVATE_USERS"),

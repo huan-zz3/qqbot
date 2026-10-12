@@ -16,7 +16,7 @@
 
 ## 容易踩的坑
 
-- **`config.ts` 在 import 时就把 `process.env` 读进 `config` 常量**（含 `dotenv.config()`）。改 env 必须在 import 之前；测试因此先在顶部 `process.env.X = ...`，再用 `await import("../src/chat/gate.js")` 动态引入被测模块（见 `tests/gate.test.ts`）。`pnpm test` 下 `NODE_TEST_CONTEXT` 被置位，故意不读本地 `.env`。
+- **`config.ts` 在 import 时就把 `process.env` 读进 `config` 常量**（含 `dotenv.config()`）。改 env 必须在 import 之前；测试因此先在顶部 `process.env.X = ...`，再用 `await import("../src/chat/gate.js")` 动态引入被测模块（见 `tests/gate.test.ts`）。`pnpm test` 下 `NODE_TEST_CONTEXT` 被置位，故意不读本地 `.env`。**`BOT_PERSONA_FILE` 指向的人设文件同样在 import 时读取**（相对路径相对进程启动目录），读不到即抛错终止启动，不静默回退。
 - ESM + `NodeNext`：**import 必须带 `.js` 后缀**（`import { config } from "./config.js"`），即使源文件是 `.ts`。
 - 挂了工具时，DeepSeek 要求把前序 assistant 回合的 `reasoning_content` 原样回传，否则 400（`llm/deepseek.ts` 的 `chatWithTools`）。
 - 工具轮数用尽（`DEEPSEEK_MAX_TOOL_ROUNDS`，默认 3）那一轮起不再挂工具，并额外追加一条 user 收尾指令要求模型纯文本作答；该轮若模型仍返回 `tool_calls` 就不再执行、直接取其文本。原因：模型曾把工具调用语法（`function_calls`/`invoke`/`<|DSML|>`）当普通文本写出，被下游按行当聊天消息发了出去（联网搜索与 opencode 共用同一轮数预算）。
@@ -31,7 +31,7 @@
 
 ## 目录
 
-- `src/index.ts` 启动、依赖组装；`src/config.ts` 环境变量（`str`/`num`/`bool`/`list` 助手）。
+- `src/index.ts` 启动、依赖组装；`src/config.ts` 环境变量（`str`/`num`/`bool`/`list`/`textFile` 助手；`textFile` 供 `BOT_PERSONA_FILE` 读追加人设）。
 - `src/napcat/` WS 客户端、OneBot 类型、消息段渲染、QQ 表情表。
 - `src/chat/gate.ts` decider 问题与阈值、无 decider 兜底；`runtime.ts` 会话防抖/判断/回复/发送/触发记忆。
 - `src/decider/questions.ts` 通用判定输入/问题类型与 noul 构造；`client.ts` 通用判定请求（POST state + questions，端点/密钥/模型来自 `config.decider`）。
@@ -47,4 +47,5 @@
 ## 约定
 
 - `data/` 是运行时状态（`state.json`、`memory.json`、`stickers/`），已被 `.gitignore` 忽略，**不要提交或公开**（含群友个人信息）。
+- `BOT_PERSONA_FILE` 指向的人设文件通常也含个人信息，放仓库根或 `data/` 并确保被 `.gitignore` 忽略（仓库已忽略根目录的 `PERSONA.txt`）。
 - 代码用 `type` 而非 `interface`；模块保持小而单一。

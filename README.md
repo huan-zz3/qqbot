@@ -164,6 +164,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `BOT_PERSONA` | 是群里的一个 AI 群友。 | 人设，接在“你是「名字」，”后面；写得越具体，说话越有性格 |
+| `BOT_PERSONA_FILE` | | 追加式人设文件的路径：内容拼到 `BOT_PERSONA` 之后；支持相对路径（相对进程启动目录），文件读不到会直接报错退出 |
 | `BOT_ALIASES` | | 群友对它的其他称呼，被叫到时 decider 能看到 |
 | `GATE_GROUP_THRESHOLD` | 0.6 | 群聊发言阈值，调低更活跃 |
 | `GATE_PRIVATE_THRESHOLD` | 0.35 | 私聊发言阈值 |
