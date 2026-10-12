@@ -272,8 +272,12 @@ export const config = {
   // 会话内存里的消息记录。
   history: {
     maxMessages: num("HISTORY_MAX_MESSAGES", 80),
-    // 给 decider 和模型看的最近消息条数；bot 自己的多行回复占多条记录，要留够才能看懂上下文。
+    // 给模型看的共享最近消息条数（所有人共用）；bot 自己的多行回复占多条记录，要留够才能看懂上下文。
     contextMessages: num("HISTORY_CONTEXT_MESSAGES", 40),
+    // 本批每个发言群友各自额外保证纳入的最近消息条数（叠加在共享窗口之上，让刷屏者的内容更完整）。
+    userContextMessages: num("HISTORY_USER_CONTEXT_MESSAGES", 20),
+    // 给 decider 看的最近消息条数；与模型窗口分开配置，不做逐发言账号保证。
+    deciderContextMessages: num("DECIDER_CONTEXT_MESSAGES", 40),
   },
   // 回复发送方式（分条 / 合并转发）。
   reply: {

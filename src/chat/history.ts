@@ -146,6 +146,34 @@ export class SessionHistory {
   }
 
   /**
+   * 组装给模型看的上下文：共享窗口「最后 overall 条」叠加「每个发言账号各自最近 perUser 条」，
+   * 合并去重后按原有时间顺序返回。用于让刷屏者触发的 prompt 更完整地携带他自己的内容。
+   * @param overall 共享窗口条数；调用方通常传「上下文条数 + 本批条数」，保证本批全部在内。
+   * @param perUser 每个发言账号额外保证的条数；<=0 或 userIds 为空时退化为只看共享窗口。
+   * @param userIds 本批发言账号（重复无妨，按账号逐个限量）。
+   */
+  context(overall: number, perUser: number, userIds: number[]): ChatRecord[] {
+    const picked = new Set<number>();
+    // 共享窗口：最后 overall 条。
+    for (let i = Math.max(0, this.records.length - overall); i < this.records.length; i++) picked.add(i);
+    // 逐账号保证：各自从新到旧取最多 perUser 条（含落在共享窗口内的），只按账号计数。
+    if (perUser > 0 && userIds.length > 0) {
+      const speakers = new Set(userIds);
+      const taken = new Map<number, number>();
+      for (let i = this.records.length - 1; i >= 0; i--) {
+        const record = this.records[i]!;
+        if (!speakers.has(record.userId)) continue;
+        const used = taken.get(record.userId) ?? 0;
+        if (used >= perUser) continue;
+        taken.set(record.userId, used + 1);
+        picked.add(i);
+      }
+    }
+    // 按原顺序输出（Set 无序，显式按时间升序过滤 records）。
+    return this.records.filter((_record, index) => picked.has(index));
+  }
+
+  /**
    * 返回 total 计数从 mark 之后新增的记录。
    * mark 由调用方在某个时点读取 total 得到；若其间记录已被裁剪，
    * 只能返回仍保留的部分（Math.min 保证不越界）。

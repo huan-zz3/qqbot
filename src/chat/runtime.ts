@@ -421,8 +421,21 @@ export class ChatRuntime {
       const now = Date.now();
       // pending 在历史里也有一份，用 Set 区分「本批新消息」与「上文」。
       const pendingSet = new Set(pending);
-      // 取到上下文条数 + 本批条数，保证本批全部包含在内。
-      const records = session.history.recent(config.history.contextMessages + pending.length);
+      // 本批发言账号（去重）：给其中每个人额外保证其最近若干条消息进入模型窗口。
+      const speakers = [...new Set(pending.map((record) => record.userId))];
+      // decider 窗口：共享最近 deciderContextMessages 条 + 本批，不做逐账号保证。
+      const deciderRecords = session.history.recent(config.history.deciderContextMessages + pending.length);
+      // 模型窗口：共享最近 contextMessages 条，叠加每个发言账号各自最近 userContextMessages 条。
+      const shared = session.history.recent(config.history.contextMessages + pending.length);
+      const records = session.history.context(
+        config.history.contextMessages + pending.length,
+        config.history.userContextMessages,
+        speakers,
+      );
+      // 记录两条窗口的实际条数与因逐账号保证额外纳入的条数，便于确认拆分是否生效。
+      logger.debug(
+        `[context] ${session.key} decider=${deciderRecords.length} model=${records.length} shared=${shared.length} speakers=${speakers.length} extra=${records.length - shared.length}`,
+      );
       // 累计强制回复：本群累计未回复消息达到条数时，本批判定强制回复一次。
       const forceThreshold = config.gate.forceReply.messages;
       const force =
@@ -436,7 +449,7 @@ export class ChatRuntime {
           botName: config.bot.name,
           aliases: config.bot.aliases,
           persona: config.bot.persona,
-          earlier: records.filter((record) => !pendingSet.has(record)), // 上文（非本批）
+          earlier: deciderRecords.filter((record) => !pendingSet.has(record)), // 上文（非本批，decider 窗口）
           pending,
           presence: session.history.presence(config.gate.presenceWindowMs, now), // 最近窗口内的活跃度
           now,

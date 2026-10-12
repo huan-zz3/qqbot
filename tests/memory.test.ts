@@ -186,3 +186,27 @@ test("the extractor is asked for lasting facts and sees who talks to whom", asyn
   // 记录行带收信对象（→ OvO）与引用原文（「我喜欢猫」）。
   assert.match(prompts[0]!, /李四（QQ 42） → OvO：我也是（引用OvO的「我喜欢猫」）/);
 });
+
+/**
+ * SessionHistory.context：共享窗口与「逐发言账号保证」的并集。
+ * 共享窗口之外，每位发言者各自最近 perUser 条也会被纳入，且保持原有时间顺序、自动去重。
+ */
+test("context guarantees each speaker's recent messages beyond the shared window", () => {
+  const history = new SessionHistory(20);
+  // 交替发言：7 在偶数位、8 在奇数位。
+  for (let i = 0; i < 10; i++) {
+    const userId = i % 2 === 0 ? 7 : 8;
+    history.add(record(userId, String(userId), `m${i}`));
+  }
+  // 共享窗口 2 条（m8、m9）；7、8 各再保证 2 条 → 并入 m6、m7，按时间升序输出。
+  assert.deepEqual(
+    history.context(2, 2, [7, 8]).map((r) => r.text),
+    ["m6", "m7", "m8", "m9"],
+  );
+  // perUser=0 时退化为只看共享窗口。
+  assert.deepEqual(history.context(2, 0, [7, 8]).map((r) => r.text), ["m8", "m9"]);
+  // 只保证单个账号：并入 7 的 m4、m6（m8 已在共享窗口内，不重复计入）。
+  assert.deepEqual(history.context(2, 3, [7]).map((r) => r.text), ["m4", "m6", "m8", "m9"]);
+  // 不在历史里的账号不影响结果。
+  assert.deepEqual(history.context(2, 3, [999]).map((r) => r.text), ["m8", "m9"]);
+});

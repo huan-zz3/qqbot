@@ -233,6 +233,22 @@ async function main(): Promise<void> {
     }
   }
 
+  // 上下文窗口不能超过会话保留环，否则会被静默裁掉、看起来「配了却没生效」。
+  const historyWindows: [string, number][] = [
+    ["HISTORY_CONTEXT_MESSAGES", config.history.contextMessages],
+    ["DECIDER_CONTEXT_MESSAGES", config.history.deciderContextMessages],
+    ["HISTORY_USER_CONTEXT_MESSAGES", config.history.userContextMessages],
+  ];
+  const overHistory = historyWindows.filter(([, size]) => size > config.history.maxMessages);
+  if (overHistory.length > 0) {
+    logger.error(
+      `以下上下文窗口超过 HISTORY_MAX_MESSAGES=${config.history.maxMessages}，会被静默裁剪：${overHistory
+        .map(([name, size]) => `${name}=${size}`)
+        .join("、")}`,
+    );
+    process.exit(1);
+  }
+
   // 打印一次装配结果，方便从日志确认哪些能力处于开启状态。
   const groups = [...config.bot.groups].join(",") || "（无）";
   const privateUsers = [...config.bot.privateUsers].join(",") || "（无）";
