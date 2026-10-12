@@ -98,6 +98,8 @@ async function main(): Promise<void> {
       retryMax: config.opencode.retryMax,
       maxOutputChars: config.opencode.maxOutputChars,
       model: config.opencode.model,
+      inputPrefix: config.opencode.inputPrefix,
+      inputSuffix: config.opencode.inputSuffix,
     });
   }
 
@@ -274,8 +276,11 @@ async function main(): Promise<void> {
     ]
       .filter(Boolean)
       .join(",") || "off";
+  // opencode 自定义输入文本的配置状态（pre/suf/off；只报位不打印内容）。
+  const opencodeInput =
+    [config.opencode.inputPrefix && "pre", config.opencode.inputSuffix && "suf"].filter(Boolean).join("+") || "off";
   logger.info(
-    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();

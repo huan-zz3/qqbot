@@ -151,7 +151,7 @@ journalctl -u qqbot -f -o cat   # 看每条消息的 decider 分数和决定
 - 服务器上安装 [OpenCode](https://opencode.ai) 并完成 `opencode auth login`（用它自己的登录态，与本项目的 MCP 联网搜索无关）；
 - `.env` 里设 `OPENCODE_ENABLED=true`，并配置**至少一个**仓库目录：主目录 `OPENCODE_CWD=/绝对路径/到/仓库`（短名固定为 `default`），或用 `OPENCODE_DIRS=短名=绝对路径 ...` 追加更多仓库（逗号/空格分隔，路径不能含空格/逗号）。任一目录非绝对路径或不是已存在的目录时，启动会报错退出，不会静默失效。
 
-调用时由**模型用短名选择**要进入的仓库（工具参数 `directory` 为必填、取值限定为这些短名）；一次调用只进一个仓库。调用与否由模型自己决定；一次任务同步执行，超时会先取消再杀掉子进程。白名单内的群 / 私聊都能触发，结果发在原会话。提示词里给模型的说明可用 `OPENCODE_PROMPT` 自定义，用来框定「什么情况下该调用」。可用 `OPENCODE_NOTICE_TEXT` 在探索开始时先发一条提示（例如「正在查看，请稍等…」），留空则不发；该提示会作为一条普通消息发出并写入会话历史，因此群聊里随后的正式回复可能带上对最后一条消息的引用。
+调用时由**模型用短名选择**要进入的仓库（工具参数 `directory` 为必填、取值限定为这些短名）；一次调用只进一个仓库。调用与否由模型自己决定；一次任务同步执行，超时会先取消再杀掉子进程。白名单内的群 / 私聊都能触发，结果发在原会话。提示词里给模型的说明可用 `OPENCODE_PROMPT` 自定义，用来框定「什么情况下该调用」。可用 `OPENCODE_NOTICE_TEXT` 在探索开始时先发一条提示（例如「正在查看，请稍等…」），留空则不发；该提示会作为一条普通消息发出并写入会话历史，因此群聊里随后的正式回复可能带上对最后一条消息的引用。还可用 `OPENCODE_INPUT_PREFIX` / `OPENCODE_INPUT_SUFFIX` 把一段自定义文本拼进**送进 acp 的 prompt**（分别前置/后置，留空则不拼、不产生多余空行）；注意这与 `OPENCODE_PROMPT`（给回复模型看的工具说明）是两回事，后者不进 acp。
 
 **超时与卡死检测**：任务有三道闸，任一到点都先协作式取消（`$/cancel_request`），宽限 5s 未恢复再硬失败并杀子进程。① 总墙钟 `OPENCODE_TIMEOUT_MS`（默认 180s）是绝对上限；② 空闲 `OPENCODE_IDLE_TIMEOUT_MS`（默认 60s）在 prompt 阶段每收到一条 ACP `session/update` 就重置，静默过久即判定 opencode 内部卡死——这是「它一直不返回、只能干等总超时」的主要兜底（正常任务会持续产生 update 当心跳）；③ 重试 `OPENCODE_RETRY_MAX`（默认 2）：opencode 在模型调用失败并排定重试时会经 `session_info_update` 的 `_meta["opencode/retry"]` 上报 `attempt`/`nextRetryAt`/`error`，活跃重试次数超过上限即提前取消。启用时若 `OPENCODE_IDLE_TIMEOUT_MS` 不为正或不小于总超时、或 `OPENCODE_RETRY_MAX` 不为正，启动即报错退出（不静默失效）。
 
@@ -192,6 +192,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `OPENCODE_MODEL` | | 给 ACP 会话指定的模型（`provider/model`，如 `deepseek/deepseek-flash`）；留空用 opencode 自己的默认（可能很贵） |
 | `OPENCODE_TIMEOUT_MS` / `OPENCODE_IDLE_TIMEOUT_MS` / `OPENCODE_RETRY_MAX` | 180000 / 60000 / 2 | 总墙钟超时 / prompt 阶段无响应空闲超时（每收一条 `session/update` 重置，静默过久判卡死）/ 容忍的模型重试次数；空闲超时须为正且小于总超时、重试上限须为正，否则启动报错退出 |
 | `OPENCODE_NOTICE_TEXT` | | opencode 开始执行时先发出的提示文本；留空则不发（会写入会话历史） |
+| `OPENCODE_INPUT_PREFIX` / `OPENCODE_INPUT_SUFFIX` | | 自定义文本，拼进**送进 `opencode acp` 的 prompt**：前置拼在任务前、后置拼在任务后（各自留空则不拼、不产生多余空行）；与上面的 `OPENCODE_PROMPT`（给回复模型看的工具说明）不是一回事 |
 | `GATE_GROUP_DEBOUNCE_MS` | 3000 | 群里等消息停下多久再判断 |
 | `DEEPSEEK_THINKING` | false | deepseek-flash 的思考模式 |
 | `DEEPSEEK_TEMPERATURE` | 1.1 | 回复的采样温度；1.3 会冒出奇怪的外文标点和单词 |

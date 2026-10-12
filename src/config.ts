@@ -222,6 +222,10 @@ export const config = {
     model: str("OPENCODE_MODEL"),
     // opencode 开始执行（模型调用该工具）时先发的一条提示文本；留空则不发，行为与未启用时一致。
     notice: str("OPENCODE_NOTICE_TEXT"),
+    // 拼进送进 `opencode acp` 的 prompt 的自定义文本：前置拼在任务前、后置拼在任务后，各留空则不拼
+    // （见 opencode/prompt.ts）。注意与 OPENCODE_PROMPT（给回复模型看的工具说明）不是一回事。
+    inputPrefix: str("OPENCODE_INPUT_PREFIX"),
+    inputSuffix: str("OPENCODE_INPUT_SUFFIX"),
     // 主仓库的绝对路径；短名固定为 "default"。与 dirsRaw 至少一个非空（启用时否则启动失败）。
     cwd: str("OPENCODE_CWD"),
     // 追加仓库列表，每项 `短名=绝对路径`，按逗号/空白切分（路径不能含空格/逗号）。

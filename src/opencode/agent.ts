@@ -21,7 +21,9 @@
  *   这是「opencode 内部卡住却不返回」的主要兜底（正常任务会持续产生 update 当心跳）；
  * - 重试上限 retryMax：解析 session_info_update 的 `_meta["opencode/retry"]`，活跃重试次数超限即提前退出。
  *
- * 依赖 config.opencode（command、args、dirs、timeoutMs、idleTimeoutMs、retryMax、maxOutputChars）。
+ * 依赖 config.opencode（command、args、dirs、timeoutMs、idleTimeoutMs、retryMax、maxOutputChars、
+ * model、inputPrefix、inputSuffix）。inputPrefix/inputSuffix 是用户自定义文本，在 execute() 里
+ * 包住整个 prompt（含文件上下文）后送入 acp；拼接规则见 opencode/prompt.ts。
  */
 import { spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
@@ -33,6 +35,7 @@ import { childEnv } from "./env.js";
 import { resolveDir, type DirEntry } from "./dirs.js";
 import { resolveModelValue } from "./model.js";
 import { decidePermission } from "./permission.js";
+import { composePrompt } from "./prompt.js";
 import { parseRetryNotice, retryExceeded } from "./retry.js";
 
 /** OpenCodeAgent 的构造参数（来自 config.opencode）。 */
@@ -50,6 +53,10 @@ export type OpenCodeOptions = {
   maxOutputChars: number;
   /** OPENCODE_MODEL：要指定的模型（provider/model）；留空则沿用 opencode 默认。 */
   model?: string;
+  /** OPENCODE_INPUT_PREFIX：拼在送进 acp 的 prompt 之前的自定义文本；留空不拼。 */
+  inputPrefix?: string;
+  /** OPENCODE_INPUT_SUFFIX：拼在送进 acp 的 prompt 之后的自定义文本；留空不拼。 */
+  inputSuffix?: string;
 };
 
 /** 把任务提示压成单行摘要，供日志使用（截断 80 字符）。 */
@@ -111,7 +118,14 @@ export class OpenCodeAgent {
     const { command, args, dirs, timeoutMs, idleTimeoutMs, retryMax, maxOutputChars } = this.options;
     const cwd = resolveDir(dirs, directory);
     const startedAt = Date.now();
-    logger.info(`[opencode] 开始 目录=${directory}(${cwd}) prompt=${summarize(prompt)}`);
+    // 用户自定义的前/后置文本在此统一拼进送进 acp 的 prompt；空则整段消失（见 prompt.ts）。
+    const prefix = this.options.inputPrefix ?? "";
+    const suffix = this.options.inputSuffix ?? "";
+    const finalPrompt = composePrompt(prefix, prompt, suffix);
+    logger.info(
+      `[opencode] 开始 目录=${directory}(${cwd}) prompt=${summarize(finalPrompt)}` +
+        ` 前置=${prefix.trim().length} 后置=${suffix.trim().length} 字符`,
+    );
 
     const child = spawn(command, args, { cwd, env: childEnv(), stdio: ["pipe", "pipe", "pipe"] });
     this.child = child;
@@ -222,7 +236,7 @@ export class OpenCodeAgent {
           }
           try {
             // prompt 的响应给出 stopReason；nextUpdate 循环累积文本、喂空闲计时器并感知重试。
-            const promptPromise = session.prompt(prompt, { cancellationSignal });
+            const promptPromise = session.prompt(finalPrompt, { cancellationSignal });
             resetIdle();
             let text = "";
             try {
