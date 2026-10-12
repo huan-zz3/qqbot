@@ -27,6 +27,7 @@
 - **`opencode acp` 没有 `--model`，也无视命令行里选的模型**；不指定就用自己的默认模型。给它选模型只能经 ACP：`session/new` 响应里的 `configOptions`（id/category=`model`）→ `session/set_config_option`（`agent.ts` 调用，值来自 `OPENCODE_MODEL`，纯逻辑在 `opencode/model.ts`，配了却不在可选列表内会报错）。全局 opencode config 的 `model` 是 `providerID` 对象且 provider 名大小写必须与注册的 id 一致（本机是 `deepseek`），写 `DeepSeek/...` 不生效。
 - @/回复 bot 只是给 decider **降低阈值**的提示，不是强制回复（`gate.ts` `decide`）。
 - 自定义「什么情况下该回复」提示词（`GATE_REPLY_QUESTION_PROMPT`/`_TRUE_PROMPT`/`_FALSE_PROMPT`）由 `gate.ts` `buildQuestions` 分别**追加**到 `should_reply` 的正文/true/false 之后，留空不追加、不替换；启动日志 `reply_prompt=` 列出已配置的位。
+- **累计强制回复**（`GATE_FORCE_REPLY_ENABLED`/`_GROUPS`/`_MESSAGES`）：仅对名单内的群**各自**累计「自上次发言/上次强制以来的群消息数」（`runtime.ts` 会话字段 `sinceBot`），达到条数时该群**下一批强制回复一次**——只覆盖回复结论（gate 的 `ctx.force`，来源标 `rule`），搜索建议仍来自 decider。清零点有三处：机器人发言（`recordSent`）、**强制判定作出时**（即便模型随后输出 `[不回复]`）、`/停止`（`dropPending`）。启用时群必须都在 `BOT_GROUPS` 内且条数为正，否则 `index.ts` 启动即 `process.exit(1)`（不静默失效）。仅群聊，私聊恒为 0；启动日志 `force_reply=` 列出范围与条数。
 - 聊天记录写成 `说话人 → 对象：正文（引用 某人的「原文」）`（`history.ts` `formatLine`/`relation`）；decider 输入、回复提示词、记忆提示词必须保持同一格式。
 - 提示词只给事实，不给规则或示例句：不写长度/语气要求，不放例句（模型会照抄）（`reply.ts` `buildSystemPrompt`）。
 - 模型输出约定：`[不回复]`（`SKIP_MARKER`）表示不说；`[表情包#编号]` 单独一行发收藏表情；收到的图片显示为 `[图片：描述]`，QQ 小黄脸显示/收发按 `[名称]`（名字表在 `napcat/faces.ts`）。回复里写的 `@名字` 会发成真 @。
@@ -38,7 +39,7 @@
 
 - `src/index.ts` 启动、依赖组装；`src/config.ts` 环境变量（`str`/`num`/`bool`/`list`/`textFile` 助手；`textFile` 供 `BOT_PERSONA_FILE` 读追加人设）。
 - `src/napcat/` WS 客户端、OneBot 类型、消息段渲染、QQ 表情表。
-- `src/chat/gate.ts` decider 问题与阈值、无 decider 兜底；`runtime.ts` 会话防抖/判断/回复/发送/触发记忆。
+- `src/chat/gate.ts` decider 问题与阈值、无 decider 兜底、`ctx.force` 强制回复；`runtime.ts` 会话防抖/判断/回复/发送/触发记忆、`sinceBot` 累计计数。
 - `src/decider/questions.ts` 通用判定输入/问题类型与 noul 构造；`client.ts` 通用判定请求（POST state + questions，端点/密钥/模型来自 `config.decider`）。
 - `src/chat/reply.ts` 提示词、输出解析、分条或合并转发；`stickers.ts`/`images.ts`/`media.ts` 表情包与图片。
 - `src/chat/files.ts` 聊天文件懒下载与文本读取；`decode.ts` 文本字节多编码严格解码（BOM 优先，UTF-8→GB18030→Big5→Shift_JIS→EUC-KR，首个成功；**GB18030 会吞掉多数 Big5/SJIS/EUC-KR 字节**，命中编码记日志以便排查）。

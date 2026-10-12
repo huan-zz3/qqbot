@@ -8,6 +8,9 @@
  *   总时长不超过 config.gate.maxWaitMs（GATE_MAX_WAIT_MS）。
  * - busy：同一会话同一时刻只处理一批；处理结束在 finally 里重新 schedule，天然串行。
  * - learnedMark：已整理进长期记忆的历史条数水位（对应 SessionHistory.total，可跨越历史裁剪）。
+ * - sinceBot：群会话自上次发言/上次强制以来累计的群消息数。仅 GATE_FORCE_REPLY_GROUPS 内的群计数，
+ *   达到 GATE_FORCE_REPLY_MESSAGES 时该群下一批强制回复一次（gate 的 ctx.force）；机器人发言、
+ *   强制判定作出、或 /停止 时清零。仅群聊，私聊恒为 0。
  *
  * 依赖关系：消息渲染来自 napcat/message.js；该不该说话由 gate.decide 判断；说什么由
  * reply.generateReply 生成；表情包/图片/记忆/开关分别是 stickers/images/memory/power，
@@ -62,6 +65,7 @@ type Session = {
   busy: boolean; // 是否正在处理一批，防止同一会话并发判断/回复
   learnedMark: number; // 已整理进记忆的历史水位
   learnTimer: NodeJS.Timeout | undefined; // 记忆整理定时器
+  sinceBot: number; // 自上次发言/上次强制以来累计的群消息数（仅 GATE_FORCE_REPLY_GROUPS 内的群计）
 };
 
 /**
@@ -207,6 +211,8 @@ export class ChatRuntime {
     // 记录同时进入历史（作为后续上下文）与待判断队列。
     session.history.add(record);
     session.pending.push(record);
+    // 累计强制回复：仅对启用名单内的群，累加自上次发言/上次强制以来的群消息。
+    if (this.forceReplyEnabled(groupId)) session.sinceBot += 1;
     this.schedule(session);
     // 批量学习仅在机器人最近参与过对话的会话里进行（engagement 窗口内）。
     const lastBotAt = session.history.presence(config.memory.engagedWindowMs, Date.now()).lastBotAt;
@@ -232,6 +238,7 @@ export class ChatRuntime {
         busy: false,
         learnedMark: 0,
         learnTimer: undefined,
+        sinceBot: 0,
       };
       this.sessions.set(key, session);
       // 群名异步加载；失败时 label 保持群号。
@@ -277,7 +284,18 @@ export class ChatRuntime {
       session.learnTimer = undefined;
       session.pending = [];
       session.firstPendingAt = undefined;
+      // 停机同样不参与：清零累计，避免恢复后旧计数立刻触发一次强制回复。
+      session.sinceBot = 0;
     }
+  }
+
+  /**
+   * 该群是否属于「累计消息强制回复」的生效范围（GATE_FORCE_REPLY_ENABLED + GATE_FORCE_REPLY_GROUPS）。
+   * 只有这些群会计数，并在达到 GATE_FORCE_REPLY_MESSAGES 时强制回复一次。
+   */
+  private forceReplyEnabled(groupId: number | undefined): boolean {
+    const force = config.gate.forceReply;
+    return force.enabled && groupId !== undefined && force.groups.has(groupId);
   }
 
   /**
@@ -405,6 +423,12 @@ export class ChatRuntime {
       const pendingSet = new Set(pending);
       // 取到上下文条数 + 本批条数，保证本批全部包含在内。
       const records = session.history.recent(config.history.contextMessages + pending.length);
+      // 累计强制回复：本群累计未回复消息达到条数时，本批判定强制回复一次。
+      const forceThreshold = config.gate.forceReply.messages;
+      const force =
+        this.forceReplyEnabled(session.target.groupId) && session.sinceBot >= forceThreshold
+          ? { count: session.sinceBot, threshold: forceThreshold }
+          : undefined;
       const decision = await decide(
         {
           scope: session.scope,
@@ -416,9 +440,12 @@ export class ChatRuntime {
           pending,
           presence: session.history.presence(config.gate.presenceWindowMs, now), // 最近窗口内的活跃度
           now,
+          force,
         },
         this.deps.decider,
       );
+      // 强制判定一经作出即清零：即便模型稍后输出 [不回复]，也不会持续卡在阈值反复强制。
+      if (force) session.sinceBot = 0;
       // 每次判断都记日志：决定与来源、分数、消息摘要，便于调阈值。
       logger.info(`[gate] ${session.key} ${formatDecision(decision)} :: ${summarize(pending)}`);
       if (decision.reply) await this.reply(session, records, pendingSet, decision.search);
@@ -625,6 +652,8 @@ export class ChatRuntime {
       replyToBot: false,
       mentionsBot: false,
     });
+    // 机器人自己发了言，累计归零（含普通回复、合并转发与降级、opencode 提示）。
+    session.sinceBot = 0;
     logger.info(`[send] ${session.key} ${text}`);
   }
 

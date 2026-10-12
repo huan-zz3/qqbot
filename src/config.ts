@@ -145,6 +145,16 @@ export const config = {
       // 追加到「不该回复」判定标准之后。
       false: str("GATE_REPLY_FALSE_PROMPT"),
     },
+    // 累计强制回复：指定群内各自累计自上次发言/上次强制以来的群消息，达到条数后下一次判断强制回复一次
+    // （绕过 should_reply 阈值，但搜索建议照常来自 decider）。关闭时不计数、不强制。
+    // 启用时 GROUPS 必须非空、都在 BOT_GROUPS 内，且 MESSAGES 为正，否则启动即报错退出（见 index.ts）。
+    forceReply: {
+      enabled: bool("GATE_FORCE_REPLY_ENABLED", false),
+      // 生效的群号（逗号/空白分隔），各群独立计数与清零。
+      groups: idSet("GATE_FORCE_REPLY_GROUPS"),
+      // 触发条数：累计这么多条群消息就强制回复一次。
+      messages: num("GATE_FORCE_REPLY_MESSAGES", 20),
+    },
   },
   // 通用 decider 判定服务：决定该不该发言、要不要挂联网搜索（端点/密钥/模型全部来自 .env，代码无 provider 默认值）。
   decider: {

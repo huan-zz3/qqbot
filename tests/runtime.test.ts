@@ -16,11 +16,16 @@ import { test } from "node:test";
 
 // 缩短防抖/发送间隔/记忆延迟，让异步流程在测试里快速跑完；import 后 config 已定型。
 process.env.BOT_NAME = "小猫";
-process.env.BOT_GROUPS = "500";
+// 501 专门给「累计强制回复」用例，避免影响其它用例所在的群 500（只在 501 计数/强制）。
+process.env.BOT_GROUPS = "500,501";
 process.env.BOT_PRIVATE_USERS = "42";
 process.env.DEEPSEEK_API_KEY = "test-key";
 process.env.GATE_DIRECT_DEBOUNCE_MS = "10";
 process.env.GATE_GROUP_DEBOUNCE_MS = "30";
+// 累计强制回复：群 501 累计 3 条未回复消息后强制回复一次（仅 501 生效）。
+process.env.GATE_FORCE_REPLY_ENABLED = "true";
+process.env.GATE_FORCE_REPLY_GROUPS = "501";
+process.env.GATE_FORCE_REPLY_MESSAGES = "3";
 process.env.NAPCAT_SEND_INTERVAL_MS = "0";
 process.env.LOG_LEVEL = "silent";
 process.env.MEMORY_LEARN_DELAY_MS = "50";
@@ -634,4 +639,43 @@ test("files from other senders are not injected", async () => {
   await wait(300);
   assert.equal(agentPrompts.length, 1);
   assert.doesNotMatch(agentPrompts[0]!, /机密内容/);
+});
+
+// 累计强制回复：群 501 累计 3 条未回复消息后，即使 decider 一直说不回，第三批也强制回复一次；
+// 强制后累计清零，后续同样低分的消息回到不回复；只有被强制的那批调用了模型。
+test("accumulated group messages force a reply once, then the counter resets", async () => {
+  const { runtime, sent, prompts } = setup(async () => ({ should_reply: 0.1, addressed: 0.1 }), ["被强制回复了"]);
+  const pump = async () => {
+    runtime.handle(groupMessage("灌水", [], 501, 7));
+    await wait(200);
+  };
+  await pump(); // 累计 1，不回复
+  await pump(); // 累计 2，不回复
+  assert.equal(sent.length, 0);
+  await pump(); // 累计 3 → 强制回复
+  assert.equal(sent.length, 1);
+  // 前两批没有回复，只有被强制的第三批调用了模型。
+  assert.equal(prompts.length, 1);
+  await pump(); // 已清零 → 累计 1，不回复
+  await pump(); // 累计 2，不回复
+  assert.equal(sent.length, 1);
+});
+
+// 另建一个 runtime：强制判定即清零——被强制的批次模型输出 [不回复]（没真发消息）时计数也已归零，
+// 因此后续低分消息不会被持续强制；再累计满后才第二次强制并真正发出。
+test("a forced batch that declines still resets the counter", async () => {
+  const { runtime, sent } = setup(async () => ({ should_reply: 0.1, addressed: 0.1 }), ["[不回复]", "这次真回"]);
+  const pump = async () => {
+    runtime.handle(groupMessage("灌水", [], 501, 7));
+    await wait(200);
+  };
+  await pump(); // 1
+  await pump(); // 2
+  await pump(); // 3 → 强制，但模型选择不回复 → 不发
+  assert.equal(sent.length, 0);
+  await pump(); // 已清零 → 1
+  await pump(); // 2
+  assert.equal(sent.length, 0); // 没有再被强制
+  await pump(); // 3 → 再次强制 → 这次真发
+  assert.equal(sent.length, 1);
 });

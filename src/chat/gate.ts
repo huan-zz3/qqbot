@@ -16,6 +16,9 @@
  * 纯反应消息（isBareReaction）不回复；搜索则一律挂上，交给模型判断。
  * GATE_DIRECT_USERS 名单里的 QQ 被 @/被回复也视同 bot 自己（direct），两条路径一致生效。
  *
+ * 强制路径：runtime 在某个群累计的未回复消息达到 GATE_FORCE_REPLY_MESSAGES 时，通过 ctx.force
+ * 要求本轮强制回复一次——判定照常进行（搜索建议不变），只把回复结论置为 true（来源标为 rule）。
+ *
  * 关键约束：@ 和被回复只是**降低阈值**的提示，绝不强制回复；机器人最近一段时间的活跃度
  * 也放进 state 交给 decider 自己权衡，代码里没有硬性冷却。
  */
@@ -40,6 +43,9 @@ export type GateContext = {
   pending: ChatRecord[]; // 本批新消息（判断的对象）
   presence: Presence; // 最近窗口内的活跃度统计
   now: number; // 当前时间戳（毫秒），用于相对时间
+  // 累计强制回复：本批所在群已累计足够多未回复消息时由 runtime 传入，判定层据此强制回复一次。
+  // count 为该群当前累计条数、threshold 为触发条数，仅用于日志展示。
+  force?: { count: number; threshold: number } | undefined;
 };
 
 /** decider 给出的原始概率与当次生效的阈值（写进日志便于调参）。 */
@@ -162,13 +168,28 @@ export function isDirect(record: ChatRecord): boolean {
 }
 
 /**
- * 判断该不该发言。
- * decider 可用时问三个是非题并按当前阈值判定（被 @/被回复时改用 directThreshold）；
- * decider 缺失或调用报错时切到规则兜底。返回值同时携带搜索建议与分数（供日志/调参）。
+ * 判断该不该发言。先按正常规则判定，再按 ctx.force 覆盖回复结论：
+ * 累计消息达到阈值的群无条件回复一次（来源标为 rule，搜索建议与原始分数仍保持判定结果）。
  * @param ctx 会话快照。
  * @param decider decider 判定器；undefined 表示走兜底。
  */
 export async function decide(ctx: GateContext, decider: Decider | undefined): Promise<GateDecision> {
+  const decision = await evaluate(ctx, decider);
+  if (!ctx.force) return decision;
+  // 只覆盖「回不回」；搜索建议照常来自判定，便于日志对照真实分数与强制的偏离。
+  return {
+    ...decision,
+    reply: true,
+    source: "rule",
+    reason: `${decision.reason}; forced (${ctx.force.count}>=${ctx.force.threshold})`,
+  };
+}
+
+/**
+ * 正常判定：decider 可用时问三个是非题并按当前阈值判定（被 @/被回复时改用 directThreshold）；
+ * decider 缺失或调用报错时切到规则兜底。返回值同时携带搜索建议与分数（供日志/调参）。
+ */
+async function evaluate(ctx: GateContext, decider: Decider | undefined): Promise<GateDecision> {
   // @ 和回复只是降低门槛；最终仍由 decider 结合机器人近期活跃度判断。
   const direct = ctx.pending.some(isDirect);
   const mentioned = ctx.pending.some((record) => record.mentionsBot);

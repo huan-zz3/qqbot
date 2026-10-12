@@ -9,6 +9,7 @@
  * - 没有硬性冷却：bot 刚发过言也由 decider 依据 state 里的活跃度自行权衡；
  * - buildState 把 bot 活跃度与 bot 自身消息标记整理进 decider 输入；
  * - decider 报错/缺失时走 fallback 硬规则：私聊、被 @、被回复、被点名且非纯反应才回；
+ * - ctx.force（累计群消息到阈值）时无视 decider 分数强制回复，来源标 rule、搜索建议不变；
  * - isBareReaction 对纯反应/收尾消息的识别。
  *
  * 注意：阈值 env 必须在动态 import 之前设置（config.ts 在 import 时读取）。
@@ -289,4 +290,33 @@ test("custom reply prompts are appended to the should_reply slots", () => {
   // 其它两题不受影响。
   assert.doesNotMatch(questions.addressed.instructions, /reply whenever it feels natural\./);
   assert.doesNotMatch(questions.needs_search.instructions, /add extra (?:true|false) guidance\./);
+});
+
+/**
+ * 累计强制回复（ctx.force）：无论 decider 分数多低、甚至走兜底，都强制回复一次；
+ * 来源标为 rule，搜索建议与原始分数仍照常来自判定（不被强制污染）。
+ */
+test("force replies regardless of the decider score and keeps the search suggestion", async () => {
+  const forced = await decide(
+    context({ force: { count: 5, threshold: 3 } }),
+    decider({ should_reply: 0.1, addressed: 0.1, needs_search: 0.9 }),
+  );
+  // 0.1 远低于群聊阈值 0.6，但被强制回复。
+  assert.equal(forced.reply, true);
+  assert.equal(forced.source, "rule");
+  assert.match(forced.reason, /forced \(5>=3\)/);
+  // 搜索建议照常来自 decider（0.9 > 0.1 → 挂），原始分数保留供日志对照。
+  assert.equal(forced.search, true);
+  assert.equal(forced.scores!.reply, 0.1);
+
+  // 相同分数、未强制时不回复。
+  const normal = await decide(context(), decider({ should_reply: 0.1, addressed: 0.1, needs_search: 0.9 }));
+  assert.equal(normal.reply, false);
+  assert.equal(normal.source, "decider");
+
+  // 无 decider 的兜底路径同样被强制（群聊普通消息本不回复）。
+  const fb = await decide(context({ force: { count: 5, threshold: 3 } }), undefined);
+  assert.equal(fb.reply, true);
+  assert.equal(fb.source, "rule");
+  assert.equal(fb.search, true);
 });

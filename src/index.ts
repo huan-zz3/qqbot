@@ -179,6 +179,24 @@ async function main(): Promise<void> {
     welcome = new Welcome({ client, power });
   }
 
+  // 累计强制回复：启用时逐项校验，缺项或配错即报错退出，避免「开了却没生效」被无声忽略。
+  if (config.gate.forceReply.enabled) {
+    if (config.gate.forceReply.messages <= 0) {
+      logger.error("GATE_FORCE_REPLY_ENABLED=true 但 GATE_FORCE_REPLY_MESSAGES 必须为正数");
+      process.exit(1);
+    }
+    if (config.gate.forceReply.groups.size === 0) {
+      logger.error("GATE_FORCE_REPLY_ENABLED=true 但 GATE_FORCE_REPLY_GROUPS 为空");
+      process.exit(1);
+    }
+    // 生效群必须都在 BOT_GROUPS 内，否则机器人本就不参与该群，配了也不会生效。
+    const outside = [...config.gate.forceReply.groups].filter((id) => !config.bot.groups.has(id));
+    if (outside.length > 0) {
+      logger.error(`GATE_FORCE_REPLY_GROUPS 含不在 BOT_GROUPS 内的群：${outside.join(",")}`);
+      process.exit(1);
+    }
+  }
+
   // 打印一次装配结果，方便从日志确认哪些能力处于开启状态。
   const groups = [...config.bot.groups].join(",") || "（无）";
   const privateUsers = [...config.bot.privateUsers].join(",") || "（无）";
@@ -192,7 +210,7 @@ async function main(): Promise<void> {
       .filter(Boolean)
       .join(",") || "off";
   logger.info(
-    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? config.decider.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? config.decider.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();
