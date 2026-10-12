@@ -3,7 +3,7 @@
 # qqbot Agent Notes
 
 - TypeScript QQ bot. NapCat OneBot v11 正向 WebSocket（NapCat 是服务端，bot 是客户端），参考 Mist-wu/OvO。
-- decider（通用判定接口，默认接 Perplexity Decisions API）决定该不该发言、以及（`needs_search > 0.1` 这么低的门槛）要不要给模型挂上联网搜索工具；端点/密钥/模型全部由 `DECIDER_API_URL`/`DECIDER_API_KEY`/`DECIDER_MODEL`（`.env`）配置，**代码里只有通用接口**，不含任何 provider 专有常量。DeepSeek 写回复并决定是否真的搜索。只用 `deepseek-flash`（`DEEPSEEK_MODEL`，硬编码）——不要加别的模型或降级。
+- decider（通用判定接口，默认接 Perplexity Decisions API）决定该不该发言、以及（`needs_search > 0.1` 这么低的门槛）要不要给模型挂上联网搜索工具；端点/密钥/模型全部由 `DECIDER_API_URL`/`DECIDER_API_KEY`/`DECIDER_MODEL`（`.env`）配置，**代码里只有通用接口**，不含任何 provider 专有常量。`DECIDER_API_KEY` 可配多个（逗号/空白分隔，顺序即优先级），共用同一端点/模型：每次判定按优先级尝试，密钥失败（网络/超时/非 2xx）就换下一个，成功者提升为最高优先级（move-to-front，仅进程内存、重启回到配置顺序）；全失败才抛出交给调用方兜底（`decider/client.ts`，纯逻辑在 `decider/keys.ts`）。DeepSeek 写回复并决定是否真的搜索。只用 `deepseek-flash`（`DEEPSEEK_MODEL`，硬编码）——不要加别的模型或降级。
 - 联网搜索连一个远程 MCP 服务器（`@modelcontextprotocol/sdk`，streamable HTTP），启动时 `tools/list` 拿到什么工具就挂什么，无常驻凭证。
 - 个人项目：模块小且可读，优先 `type`，注释从简。
 - 完整文档（中文）在 `README.md`；本文件只记 agent 容易踩的、不易从文件名看出的点。

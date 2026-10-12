@@ -101,7 +101,7 @@ NAPCAT_TOKEN=和 NapCat 里一致
 DEEPSEEK_API_KEY=sk-...
 DECIDER_API_URL=https://api.perplexity.ai/v1/decisions
 DECIDER_MODEL=pplx-decider-v1.1-27b
-DECIDER_API_KEY=pplx-...
+DECIDER_API_KEY=pplx-key1,pplx-key2
 BOT_NAME=机器人的名字
 BOT_GROUPS=要发言的群号,逗号分隔
 BOT_PRIVATE_USERS=允许私聊的QQ号,逗号分隔
@@ -181,7 +181,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `GATE_FORCE_REPLY_ENABLED` | false | 启用「累计群消息强制回复」：指定群各自累计未回复的群消息，达到条数后下一次判断强制回复一次（跳过回复阈值，搜索建议照常来自 decider） |
 | `GATE_FORCE_REPLY_GROUPS` | | 生效的群号，逗号分隔；各群独立计数与清零。必须都在 `BOT_GROUPS` 内，启用时不能为空，否则启动报错退出 |
 | `GATE_FORCE_REPLY_MESSAGES` | 20 | 触发条数；启用时必须为正，否则启动报错退出 |
-| `DECIDER_API_URL` / `DECIDER_MODEL` / `DECIDER_API_KEY` | Perplexity Decisions | 通用判定接口的端点 / 模型 / 密钥；`DECIDER_API_URL` 为空即停用 decider，退回规则兜底 |
+| `DECIDER_API_URL` / `DECIDER_MODEL` / `DECIDER_API_KEY` | Perplexity Decisions | 通用判定接口的端点 / 模型 / 密钥；`DECIDER_API_URL` 为空即停用 decider，退回规则兜底。`DECIDER_API_KEY` 可配多个（逗号/空格分隔），共用同一端点与模型：按顺序为优先级，某个失败就换下一个，成功者提升为最高优先级（仅进程内存，重启回到配置顺序） |
 | `OPENCODE_ENABLED` / `OPENCODE_CWD` | false / | 启用只读 OpenCode；`CWD` 是可访问的主仓库绝对路径（短名固定 `default`） |
 | `OPENCODE_DIRS` | | 追加的可访问仓库，每项 `短名=绝对路径`，逗号/空格分隔（路径不能含空格/逗号）；调用时模型用短名选择 |
 | `OPENCODE_PROMPT` | （内置只读说明） | 提示词里给模型的 opencode 说明，用来框定「什么情况下该调用」 |

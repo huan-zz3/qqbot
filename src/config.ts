@@ -176,10 +176,11 @@ export const config = {
   },
   // 通用 decider 判定服务：决定该不该发言、要不要挂联网搜索（端点/密钥/模型全部来自 .env，代码无 provider 默认值）。
   decider: {
-    // 判定端点完整 URL；空则未配置。
+    // 判定端点完整 URL；空则未配置。多密钥共用同一端点与模型。
     apiUrl: str("DECIDER_API_URL"),
-    // 判定服务密钥；空则未配置。
-    apiKey: str("DECIDER_API_KEY"),
+    // 判定服务密钥；可配多个（逗号/空白分隔，顺序即优先级），空数组即未配置。
+    // 每次判定按优先级尝试，失败换下一个、成功提升为最高优先级（见 decider/client.ts）。
+    apiKeys: list("DECIDER_API_KEY"),
     // 判定模型名；空则未配置。
     model: str("DECIDER_MODEL"),
     timeoutMs: num("DECIDER_TIMEOUT_MS", 5000),
