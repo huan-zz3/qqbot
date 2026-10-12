@@ -194,8 +194,6 @@ export const config = {
     maxTokens: num("DEEPSEEK_MAX_TOKENS", 800),
     // 只用于生成回复；试过 1.3，会冒出奇怪的外文标点和单词。
     temperature: num("DEEPSEEK_TEMPERATURE", 1.1),
-    // 带工具时最多允许几轮工具调用。
-    maxToolRounds: num("DEEPSEEK_MAX_TOOL_ROUNDS", 3),
   },
   // 联网搜索：连一个远程 MCP 服务器，把它暴露的全部工具挂给模型（无常驻凭证）。
   search: {
@@ -206,6 +204,8 @@ export const config = {
     // 断连后重连：首次间隔，以及指数退避（×2）的封顶。
     reconnectMinMs: num("SEARCH_MCP_RECONNECT_MIN_MS", 5000),
     reconnectMaxMs: num("SEARCH_MCP_RECONNECT_MAX_MS", 60000),
+    // 联网搜索组的工具轮数上限；与 opencode 组各自独立计数。
+    maxToolRounds: num("SEARCH_MAX_TOOL_ROUNDS", 3),
   },
   // 基础能力：让模型在固定仓库里只读地调用 OpenCode（ACP，见 src/opencode/agent.ts）。
   // 需要机器上已安装 opencode 并完成 `opencode auth login`；权限请求一律拒绝，因此只能读不能改。
@@ -230,6 +230,8 @@ export const config = {
     timeoutMs: num("OPENCODE_TIMEOUT_MS", 180000),
     // 返回文本的截断上限，避免把超长输出整段塞给模型。
     maxOutputChars: num("OPENCODE_MAX_OUTPUT_CHARS", 4000),
+    // opencode 组的工具轮数上限；与联网搜索组各自独立计数。
+    maxToolRounds: num("OPENCODE_MAX_TOOL_ROUNDS", 3),
   },
   // 表情包收藏与识图描述。
   stickers: {

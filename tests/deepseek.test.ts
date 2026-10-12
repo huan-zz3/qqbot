@@ -5,8 +5,8 @@
  * - chatWithTools：执行工具并把结果回填给模型，返回最终文本；请求体 model 固定
  *   deepseek-flash、默认温度 1.1；前序 assistant 回合的 reasoning_content
  *   必须原样回传（DeepSeek 挂工具时的硬性要求，否则接口 400）；
- * - 工具轮数上限（DEEPSEEK_MAX_TOOL_ROUNDS=2）之后不再提供工具，并追加一条 user 收尾指令；
- *   收尾轮若模型仍返回 tool_calls，不再执行，直接取其文本内容收尾；
+ * - 工具按组各自独立计轮：某组用满只撤该组并注入「该组不可用」提示，各组都用满才注入
+ *   「纯文本作答」收尾指令；收尾轮若模型仍返回 tool_calls，不再执行，直接取其文本内容收尾；
  * - 工具参数不是合法 JSON 时，把错误文本作为工具结果交回模型而非抛错；
  * - completeJson：解析失败重试一次，两次都失败才抛错；JSON 调用不提交 temperature。
  *
@@ -17,8 +17,6 @@ import { test } from "node:test";
 
 // 必须在 import deepseek.js 之前设置（config.ts 在 import 时读取）。
 process.env.DEEPSEEK_API_KEY = "test-key";
-// 工具最多提供 2 轮，第 3 轮请求起不再挂工具。
-process.env.DEEPSEEK_MAX_TOOL_ROUNDS = "2";
 
 // 动态引入被测模块（env 已生效）。
 const { chatWithTools, completeJson, DEEPSEEK_MODEL } = await import("../src/llm/deepseek.js");
@@ -50,6 +48,14 @@ const searchTool = (log: string[]) => ({
   },
 });
 
+// 构造一个工具组：默认组名 search、展示名「联网搜索」，便于单独断言各组独立计轮。
+const groupOf = (tools: unknown[], maxRounds: number, name = "search") => ({
+  name,
+  label: name === "search" ? "联网搜索" : name,
+  tools,
+  maxRounds,
+});
+
 /**
  * 完整工具循环：第一轮模型返回 reasoning_content + search 工具调用，
  * 第二轮给出最终文本。断言：
@@ -77,7 +83,7 @@ test("runs tools and passes reasoning_content back", async () => {
   ]);
   // 记录工具 handler 实际收到的查询词。
   const log: string[] = [];
-  const text = await chatWithTools([{ role: "user", content: "问题" }], [searchTool(log)]);
+  const text = await chatWithTools([{ role: "user", content: "问题" }], [groupOf([searchTool(log)], 2)]);
 
   // 最终返回第二轮的文本。
   assert.equal(text, "答案是42");
@@ -101,7 +107,7 @@ test("runs tools and passes reasoning_content back", async () => {
 });
 
 /**
- * 工具轮数上限：maxToolRounds=2，前两轮照常提供工具；
+ * 工具组轮数上限：该组 maxRounds=2，前两轮照常提供工具；
  * 第三轮请求体不再携带 tools，迫使模型收尾给出文本「好」。
  */
 test("stops offering tools after the round limit", async () => {
@@ -113,7 +119,7 @@ test("stops offering tools after the round limit", async () => {
   };
   // 预设 3 轮响应：工具调用、工具调用、最终文本。
   const bodies = mockFetch([call, call, { choices: [{ message: { content: "好" } }] }]);
-  const text = await chatWithTools([{ role: "user", content: "q" }], [searchTool([])]);
+  const text = await chatWithTools([{ role: "user", content: "q" }], [groupOf([searchTool([])], 2)]);
   assert.equal(text, "好");
   // 一共发了 3 次请求。
   assert.equal(bodies.length, 3);
@@ -139,7 +145,7 @@ test("ignores tool calls returned after the round limit", async () => {
   };
   const bodies = mockFetch([call, call, call]);
   const log: string[] = [];
-  const text = await chatWithTools([{ role: "user", content: "q" }], [searchTool(log)]);
+  const text = await chatWithTools([{ role: "user", content: "q" }], [groupOf([searchTool(log)], 2)]);
   // 收尾轮的文本内容被采用。
   assert.equal(text, "还想调");
   // 总共 3 次请求；前两轮执行了工具，收尾轮的调用被忽略。
@@ -158,9 +164,108 @@ test("bad tool arguments are reported to the model instead of throwing", async (
     { choices: [{ message: { content: "ok" } }] },
   ]);
   // 参数非法不中断循环，最终仍拿到文本回复。
-  assert.equal(await chatWithTools([{ role: "user", content: "q" }], [searchTool([])]), "ok");
+  assert.equal(await chatWithTools([{ role: "user", content: "q" }], [groupOf([searchTool([])], 2)]), "ok");
   // 回填给模型的最后一条消息是错误提示。
   assert.equal(bodies[1]!.messages.at(-1).content, "工具参数不是合法 JSON");
+});
+
+// 构造一个指定名字的工具：handler 记录被调用并返回固定结果，用于观察两组独立计轮。
+const namedTool = (name: string, log: string[]) => ({
+  definition: {
+    type: "function" as const,
+    function: { name, description: name, parameters: { type: "object", properties: {} } },
+  },
+  handler: async () => {
+    log.push(name);
+    return `结果: ${name}`;
+  },
+});
+
+/**
+ * 两组各自独立计轮：搜索组 maxRounds=1、opencode 组 maxRounds=1。
+ * - 第 1 轮两组都挂上，模型只调搜索 → 搜索用满；
+ * - 第 2 轮只挂 opencode（搜索被撤），并注入「联网搜索不可用」提示；
+ * - 第 3 轮两组都用满，注入「纯文本作答」收尾指令、不再挂工具。
+ */
+test("counts tool rounds per group independently", async () => {
+  const calls = [
+    { choices: [{ message: { content: "", tool_calls: [{ id: "s", type: "function", function: { name: "search", arguments: "{}" } }] } }] },
+    { choices: [{ message: { content: "", tool_calls: [{ id: "o", type: "function", function: { name: "opencode", arguments: "{}" } }] } }] },
+    { choices: [{ message: { content: "好" } }] },
+  ];
+  const bodies = mockFetch(calls);
+  const text = await chatWithTools([{ role: "user", content: "q" }], [
+    groupOf([namedTool("search", [])], 1),
+    groupOf([namedTool("opencode", [])], 1, "opencode"),
+  ]);
+  assert.equal(text, "好");
+  assert.equal(bodies.length, 3);
+  // 第 1 轮两组都挂。
+  const first = (bodies[0]!.tools as any[]).map((t) => t.function.name);
+  assert.deepEqual(first.sort(), ["opencode", "search"]);
+  // 第 2 轮搜索已撤，只剩 opencode，并注入该组不可用提示。
+  const second = (bodies[1]!.tools as any[]).map((t) => t.function.name);
+  assert.deepEqual(second, ["opencode"]);
+  assert.match(bodies[1]!.messages.at(-1).content, /联网搜索的调用次数已用尽/);
+  // 第 3 轮两组都用满：不再挂工具，注入纯文本收尾指令。
+  assert.equal(bodies[2]!.tools, undefined);
+  assert.match(bodies[2]!.messages.at(-1).content, /工具调用次数已用尽/);
+});
+
+/**
+ * 同一轮同时调用两组时，两组计数各 +1：两组 maxRounds 均为 1，
+ * 第 1 轮一次调用两组，第 2 轮即全部用满、不再挂工具。
+ */
+test("a round calling both groups advances both counters", async () => {
+  const both = {
+    choices: [
+      {
+        message: {
+          content: "",
+          tool_calls: [
+            { id: "s", type: "function", function: { name: "search", arguments: "{}" } },
+            { id: "o", type: "function", function: { name: "opencode", arguments: "{}" } },
+          ],
+        },
+      },
+    ],
+  };
+  const bodies = mockFetch([both, { choices: [{ message: { content: "好" } }] }]);
+  const log: string[] = [];
+  const text = await chatWithTools([{ role: "user", content: "q" }], [
+    groupOf([namedTool("search", log)], 1),
+    groupOf([namedTool("opencode", log)], 1, "opencode"),
+  ]);
+  assert.equal(text, "好");
+  // 两组各执行一次。
+  assert.deepEqual(log.sort(), ["opencode", "search"]);
+  // 第 2 轮两组都已用满：不再挂工具。
+  assert.equal(bodies[1]!.tools, undefined);
+});
+
+/**
+ * 调用已用尽组的工具：不真正执行（handler 不再被调），且因本轮没有可执行调用，
+ * 直接取文本收尾以保证循环终止。
+ */
+test("does not execute calls to an exhausted group and finalizes", async () => {
+  const callSearch = {
+    choices: [{ message: { content: "", tool_calls: [{ id: "s", type: "function", function: { name: "search", arguments: "{}" } }] } }],
+  };
+  // 第 2 轮模型无视提示、仍调用已用尽的搜索，并带上一段文本。
+  const callSearchAgain = {
+    choices: [{ message: { content: "算了", tool_calls: [{ id: "s2", type: "function", function: { name: "search", arguments: "{}" } }] } }],
+  };
+  const bodies = mockFetch([callSearch, callSearchAgain]);
+  const log: string[] = [];
+  const text = await chatWithTools([{ role: "user", content: "q" }], [
+    groupOf([namedTool("search", log)], 1),
+    groupOf([namedTool("opencode", log)], 1, "opencode"),
+  ]);
+  // 已用尽组的调用被忽略，直接取其文本收尾。
+  assert.equal(text, "算了");
+  assert.equal(bodies.length, 2);
+  // handler 只在第 1 轮被调用一次。
+  assert.deepEqual(log, ["search"]);
 });
 
 /**

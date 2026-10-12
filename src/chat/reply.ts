@@ -15,7 +15,7 @@
  */
 import { config } from "../config.js";
 import { FACE_IDS } from "../napcat/faces.js";
-import { chatWithTools, type ChatMessage, type Tool } from "../llm/deepseek.js";
+import { chatWithTools, type ChatMessage, type Tool, type ToolGroup } from "../llm/deepseek.js";
 import { logger } from "../logger.js";
 import type { OpenCodeAgent } from "../opencode/agent.js";
 import type { McpSearch } from "../search/mcp-search.js";
@@ -270,18 +270,33 @@ export type ReplyTools = {
 
 /**
  * 生成回复：拼 system + 聊天记录交给 deepseek（可能带工具循环），再解析成片段。
+ * 联网搜索与 opencode 各成一个工具组，各自独立计轮（上限见 config.search/opencode.maxToolRounds）。
  * @param ctx 会话快照。
  * @param backends 本次可挂载的后端；缺省表示都不挂。
  * @returns 空数组表示模型选择不回复。
  */
 export async function generateReply(ctx: ReplyContext, backends: ReplyTools): Promise<ReplyPart[]> {
-  const tools: Tool[] = [];
-  if (backends.search) tools.push(...backends.search.tools());
-  if (backends.opencode) tools.push(openCodeTool(backends.opencode, backends.opencodeContext, backends.onOpencodeStart));
-  const toolNames = tools.map((tool) => tool.definition.function.name);
+  const groups: ToolGroup[] = [];
+  if (backends.search) {
+    groups.push({
+      name: "search",
+      label: "联网搜索",
+      tools: backends.search.tools(),
+      maxRounds: config.search.maxToolRounds,
+    });
+  }
+  if (backends.opencode) {
+    groups.push({
+      name: "opencode",
+      label: "opencode",
+      tools: [openCodeTool(backends.opencode, backends.opencodeContext, backends.onOpencodeStart)],
+      maxRounds: config.opencode.maxToolRounds,
+    });
+  }
+  const toolNames = groups.flatMap((group) => group.tools.map((tool) => tool.definition.function.name));
   const messages: ChatMessage[] = [
     { role: "system", content: buildSystemPrompt(ctx, toolNames, backends.search !== undefined) },
     { role: "user", content: buildTranscript(ctx) },
   ];
-  return postProcess(await chatWithTools(messages, tools), ctx.botName);
+  return postProcess(await chatWithTools(messages, groups), ctx.botName);
 }
