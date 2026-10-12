@@ -134,6 +134,8 @@ sudo systemctl enable --now qqbot
 journalctl -u qqbot -f -o cat   # 看每条消息的 decider 分数和决定
 ```
 
+单元里显式设了 `Environment=PATH=...`：systemd 的默认 PATH 不含 nvm 的 bin 目录，而 `opencode` 子进程（spawn 时继承本进程环境，见 `src/opencode/env.ts`）里，CodeGraph 的 MCP server 与模型自己的 bash 工具都按 PATH 找 `codegraph`/`node`，缺了就会 `codegraph: command not found`。把装了 `opencode`/`node`/`codegraph` 的那个目录（本机是 nvm 的 bin）写进 PATH 即可；改用别的方式安装时相应替换该目录。改完单元要 `sudo install -m 644 deploy/qqbot.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart qqbot`。
+
 ### 4. 联网搜索（可选）
 
 搜索走一个远程 MCP 服务器（streamable HTTP）：进程启动时连一次，把服务器 `tools/list` 返回的全部工具（多引擎搜索，以及抓取网页正文 / README / 掘金 / CSDN / linux.do 文章等）挂给模型，搜不搜、抓不抓由模型决定。每个 JSON-RPC 调用都是一次独立的 HTTP POST；启动时连不上、或运行中会话失效（服务器重启 / 会话过期），会按指数退避自动重连（首次 `SEARCH_MCP_RECONNECT_MIN_MS`，成长 ×2，封顶 `SEARCH_MCP_RECONNECT_MAX_MS`），重连期间搜索暂不挂载、成功后自动恢复，无需重启。

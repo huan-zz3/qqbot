@@ -9,6 +9,11 @@ Wants=network-online.target
 Type=simple
 User=huanzze
 WorkingDirectory=/home/huanzze/Dev/qqbot
+# 显式给进程一条 PATH：systemd 默认 PATH 不含 nvm 的 bin 目录，而 opencode 子进程
+# （见 src/opencode/agent.ts 的 childEnv，它继承本进程环境）里，codegraph 的 MCP server
+# 与模型的 bash 工具都按 PATH 找 codegraph/node，缺了就会 `codegraph: command not found`。
+# 这里把 nvm 的 bin 目录（同时含 opencode/node/codegraph）放在最前。
+Environment=PATH=/home/huanzze/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # 由 `pnpm build` 产出的自包含可执行文件；无需 Node 运行时与 node_modules。
 ExecStart=/home/huanzze/Dev/qqbot/dist/qqbot
 Restart=always
