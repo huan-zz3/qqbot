@@ -432,9 +432,11 @@ export class ChatRuntime {
         config.history.userContextMessages,
         speakers,
       );
-      // 记录两条窗口的实际条数与因逐账号保证额外纳入的条数，便于确认拆分是否生效。
+      // 记录两条窗口的实际条数与额外纳入的条数，便于确认拆分与 bot 补齐是否生效。
+      // 共享窗口是模型窗口的子集，故 botFill 恒 >= 0，且恰等于因补齐纳入的 bot 消息条数。
+      const countBot = (list: ChatRecord[]) => list.reduce((n, record) => n + (record.fromBot ? 1 : 0), 0);
       logger.debug(
-        `[context] ${session.key} decider=${deciderRecords.length} model=${records.length} shared=${shared.length} speakers=${speakers.length} extra=${records.length - shared.length}`,
+        `[context] ${session.key} decider=${deciderRecords.length} model=${records.length} shared=${shared.length} speakers=${speakers.length} extra=${records.length - shared.length} botFill=${countBot(records) - countBot(shared)}`,
       );
       // 累计强制回复：本群累计未回复消息达到条数时，本批判定强制回复一次。
       const forceThreshold = config.gate.forceReply.messages;

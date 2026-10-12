@@ -147,10 +147,11 @@ export class SessionHistory {
 
   /**
    * 组装给模型看的上下文：共享窗口「最后 overall 条」叠加「每个发言账号各自最近 perUser 条」，
-   * 合并去重后按原有时间顺序返回。用于让刷屏者触发的 prompt 更完整地携带他自己的内容。
+   * 再在该窗口已经触及的范围（最旧选中下标 → 末尾）内补齐 bot 自己的消息，合并去重后按时间顺序返回。
+   * 用于让刷屏者触发的 prompt 更完整地携带他自己的内容，且 bot 落在逐账号空档里的回复不被丢弃。
    * @param overall 共享窗口条数；调用方通常传「上下文条数 + 本批条数」，保证本批全部在内。
    * @param perUser 每个发言账号额外保证的条数；<=0 或 userIds 为空时退化为只看共享窗口。
-   * @param userIds 本批发言账号（重复无妨，按账号逐个限量）。
+   * @param userIds 本批发言账号（重复无妨，按账号逐个限量）；bot 不作为发言账号参与此处。
    */
   context(overall: number, perUser: number, userIds: number[]): ChatRecord[] {
     const picked = new Set<number>();
@@ -167,6 +168,15 @@ export class SessionHistory {
         if (used >= perUser) continue;
         taken.set(record.userId, used + 1);
         picked.add(i);
+      }
+    }
+    // bot 补齐：窗口已触及的范围（最旧选中下标 → 末尾）内，凡 bot 自己的消息一律纳入，
+    // 避免它们落在逐账号保证的空档里被丢弃；只补区间内、不改变下界（比下界更旧的 bot 消息仍不进）。
+    if (picked.size > 0) {
+      let min = this.records.length;
+      for (const index of picked) if (index < min) min = index;
+      for (let i = min; i < this.records.length; i++) {
+        if (this.records[i]!.fromBot) picked.add(i);
       }
     }
     // 按原顺序输出（Set 无序，显式按时间升序过滤 records）。
