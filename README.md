@@ -46,7 +46,7 @@ NapCat ──WS──> 收消息 ──防抖合并──> decider 判断 ──
 | `addressed` | 是不是在跟机器人说话，记录在日志里便于调参 |
 | `needs_search` | 高于 0.1 就给模型挂上 MCP 搜索工具（前提是 MCP 服务器可用） |
 
-机器人最近 5 分钟发了多少言、距上次发言多久，也一起放进 decider 的输入里，让它自己权衡别刷屏，代码里没有硬性冷却。decider 不可用时退化为：私聊、被 @、被回复、被点名才回复，纯反应消息不回。
+机器人最近 5 分钟发了多少言、距上次发言多久，也一起放进 decider 的输入里，让它自己权衡别刷屏，代码里没有硬性冷却。`should_reply` 的正文与 true/false 判定标准都支持追加自定义提示词（`GATE_REPLY_QUESTION_PROMPT` / `GATE_REPLY_TRUE_PROMPT` / `GATE_REPLY_FALSE_PROMPT`，留空不追加），用来补充「什么情况下该回复」。decider 不可用时退化为：私聊、被 @、被回复、被点名才回复，纯反应消息不回。
 
 ## 快速开始
 
@@ -172,6 +172,8 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `GATE_DIRECT_USERS` | | 名单里的 QQ 被 @ 或被回复时视同机器人自己被 @/回复，同样走 0.45 这个 direct 阈值（防抖也按 direct 处理）；逗号分隔 |
 | `HISTORY_CONTEXT_MESSAGES` | 40 | 给 decider 和模型看的最近消息条数 |
 | `GATE_SEARCH_THRESHOLD` | 0.1 | `needs_search` 高于它就挂上搜索工具 |
+| `GATE_REPLY_QUESTION_PROMPT` | | 追加到 `should_reply` 问题正文之后的自定义提示词 |
+| `GATE_REPLY_TRUE_PROMPT` / `GATE_REPLY_FALSE_PROMPT` | | 分别追加到 `should_reply` 的 true / false 判定标准之后 |
 | `DECIDER_API_URL` / `DECIDER_MODEL` / `DECIDER_API_KEY` | Perplexity Decisions | 通用判定接口的端点 / 模型 / 密钥；`DECIDER_API_URL` 为空即停用 decider，退回规则兜底 |
 | `OPENCODE_ENABLED` / `OPENCODE_CWD` | false / | 启用只读 OpenCode；`CWD` 是允许访问的仓库绝对路径 |
 | `OPENCODE_PROMPT` | （内置只读说明） | 提示词里给模型的 opencode 说明，用来框定「什么情况下该调用」 |

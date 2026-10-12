@@ -135,6 +135,16 @@ export const config = {
     presenceWindowMs: num("GATE_PRESENCE_WINDOW_MS", 5 * 60 * 1000),
     // decider 的 needs_search 分数高于它就给模型挂上联网搜索工具。
     searchThreshold: num("GATE_SEARCH_THRESHOLD", 0.1),
+    // 自定义「什么情况下该回复」提示词：分别**追加**到 decider should_reply 问题的正文、true/false
+    // 判定标准之后；留空即不追加（保持内置文案）。
+    replyPrompt: {
+      // 追加到问题正文（instructions；注意不是 decider 的 state 对象）之后。
+      question: str("GATE_REPLY_QUESTION_PROMPT"),
+      // 追加到「该回复」判定标准之后。
+      true: str("GATE_REPLY_TRUE_PROMPT"),
+      // 追加到「不该回复」判定标准之后。
+      false: str("GATE_REPLY_FALSE_PROMPT"),
+    },
   },
   // 通用 decider 判定服务：决定该不该发言、要不要挂联网搜索（端点/密钥/模型全部来自 .env，代码无 provider 默认值）。
   decider: {

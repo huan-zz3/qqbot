@@ -22,9 +22,13 @@ process.env.GATE_PRIVATE_THRESHOLD = "0.35";
 process.env.GATE_DIRECT_THRESHOLD = "0.3";
 process.env.GATE_DIRECT_USERS = "10001,10002";
 process.env.GATE_SEARCH_THRESHOLD = "0.1";
+// 回复判定追加提示词：三项分别落到 should_reply 的正文 / true / false。
+process.env.GATE_REPLY_QUESTION_PROMPT = "reply whenever it feels natural.";
+process.env.GATE_REPLY_TRUE_PROMPT = "add extra true guidance.";
+process.env.GATE_REPLY_FALSE_PROMPT = "add extra false guidance.";
 
 // 动态引入被测模块（env 已生效）。
-const { decide, buildState, isBareReaction } = await import("../src/chat/gate.js");
+const { decide, buildState, buildQuestions, isBareReaction } = await import("../src/chat/gate.js");
 // 从 decide() 的参数类型取出 GateContext 与其消息元素 ChatRecord 类型。
 type GateContext = Parameters<typeof decide>[0];
 type ChatRecord = GateContext["pending"][number];
@@ -263,4 +267,26 @@ test("state marks the bot's own messages and flags", () => {
   assert.equal(state.earlier_messages[0].from, "小猫 (the bot itself)");
   // 新消息带 at_bot 标记。
   assert.equal(state.new_messages[0].at_bot, true);
+});
+
+/**
+ * GATE_REPLY_QUESTION_PROMPT / _TRUE_PROMPT / _FALSE_PROMPT 三个提示词分别**追加**到
+ * should_reply 的正文 / criteria.true / criteria.false 之后：基础文案原样保留，只在其后接一段。
+ * 追加只作用于 should_reply，不污染 addressed / needs_search。
+ */
+test("custom reply prompts are appended to the should_reply slots", () => {
+  const questions = buildQuestions("小猫") as any;
+  const should = questions.should_reply;
+  // 正文：基础文案 + 追加文案。
+  assert.match(should.instructions, /Should 小猫, a member of this QQ chat, send a message now/);
+  assert.match(should.instructions, /reply whenever it feels natural\./);
+  // true 标准：基础文案 + 追加文案。
+  assert.match(should.criteria.true, /new_messages call for a response from 小猫/);
+  assert.match(should.criteria.true, /add extra true guidance\./);
+  // false 标准：基础文案 + 追加文案。
+  assert.match(should.criteria.false, /new_messages do not need anything from 小猫/);
+  assert.match(should.criteria.false, /add extra false guidance\./);
+  // 其它两题不受影响。
+  assert.doesNotMatch(questions.addressed.instructions, /reply whenever it feels natural\./);
+  assert.doesNotMatch(questions.needs_search.instructions, /add extra (?:true|false) guidance\./);
 });
