@@ -251,21 +251,35 @@ test("a 1401 ban failure sends no reply and forces a role recheck", async () => 
   assert.equal(roleCalls(), 2);
 });
 
-// 边界：机器人自身在群里的角色决定群管理是否生效——
-// member（非管理员）时静默跳过；admin 时正常撤回并回复。
-test("bot role gates moderation: member does nothing, admin proceeds", async () => {
-  const decider = async () => ({ recall: 0.9, ban: 0.1, reply: 0.1 });
+// 边界：机器人自身角色只决定撤回/禁言能否执行，不再作为判定的前提——
+// member（非管理员）时判定照常进行，撤回命中被跳过（不执行、不发言）；回复始终可用；
+// admin 时正常撤回并回复。
+test("bot role gates only recall/ban: member is still judged and can reply", async () => {
+  let judged = 0;
+  const recallDecider = async () => {
+    judged++;
+    return { recall: 0.9, ban: 0.1, reply: 0.1 };
+  };
 
+  // 撤回命中：member 无法执行，不删消息也不发言，但判定确实发生了。
   const member = setup({ role: "member" });
-  const memberModeration = new Moderation(deps(member.client, decider));
-  memberModeration.handle(groupMessage("广告消息"));
+  new Moderation(deps(member.client, recallDecider)).handle(groupMessage("广告消息"));
   await wait(50);
+  assert.equal(judged, 1);
   assert.equal(member.sent.length, 0);
   assert.equal(member.actions.filter((item) => item.action === "delete_msg").length, 0);
 
+  // 回复命中：member 也能 @ 对方发固定文本。
+  const memberReply = setup({ role: "member" });
+  const replyDecider = async () => ({ recall: 0.1, ban: 0.1, reply: 0.9 });
+  new Moderation(deps(memberReply.client, replyDecider)).handle(groupMessage("提醒一下"));
+  await wait(50);
+  assert.equal(memberReply.sent.length, 1);
+  assert.equal(replyText(memberReply.sent[0]!.message), "请注意言辞");
+
+  // admin：撤回正常执行并发固定文本。
   const admin = setup({ role: "admin" });
-  const adminModeration = new Moderation(deps(admin.client, decider));
-  adminModeration.handle(groupMessage("广告消息"));
+  new Moderation(deps(admin.client, recallDecider)).handle(groupMessage("广告消息"));
   await wait(50);
   assert.equal(admin.sent.length, 1);
   assert.equal(admin.actions.filter((item) => item.action === "delete_msg").length, 1);
@@ -292,6 +306,19 @@ test("no triggered op leaves the message unmarked", async () => {
   const decider = async () => ({ recall: 0.1, ban: 0.1, reply: 0.1 });
   const moderation = new Moderation({ ...deps(client, decider), handoff });
   moderation.handle(groupMessage("普通消息"));
+  await wait(50);
+  assert.deepEqual(marked, []);
+});
+
+// handoff：撤回命中但机器人无管理权限、未实际执行时，不算群管理生效，不标记，
+// 聊天照常走 AI 回复（命中「执行」而非「判定」才跳过）。
+test("an op skipped for lack of permission is not marked via handoff", async () => {
+  const marked: number[] = [];
+  const handoff = { mark: (id: number) => marked.push(id), handled: () => false, begin: () => undefined, settle: () => undefined };
+  const { client } = setup({ role: "member" });
+  const decider = async () => ({ recall: 0.9, ban: 0.1, reply: 0.1 });
+  const moderation = new Moderation({ ...deps(client, decider), handoff });
+  moderation.handle(groupMessage("广告消息"));
   await wait(50);
   assert.deepEqual(marked, []);
 });

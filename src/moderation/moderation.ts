@@ -1,15 +1,17 @@
 /**
- * moderation.ts —— 群管理：机器人以群主/管理员身份自主巡查群消息，执行撤回/禁言/回复。
+ * moderation.ts —— 群管理：机器人自主巡查群消息，执行撤回/禁言/回复。
  *
  * 流程：每条群消息连同它前面 MODERATION_CONTEXT_MESSAGES 条上下文交给 decider，
  * 一次问三个问题（撤回 / 禁言 / 回复）；三个操作各自独立、按各自阈值触发、无优先级，
  * 一条消息可同时命中多项，执行顺序为 撤回 → 禁言 → 回复，每项完成后 @ 对方发一条固定文本。
  *
  * 关键约定：
- * - 命中任一操作时标记该消息（handoff），普通聊天流程据此跳过同一批的 AI 回复；
- *   未命中时该消息仍照常进入 chat/ 流程；
+ * - 判定不要求机器人自身是管理员，始终进行；但撤回/禁言需要管理权限：无权限时该项
+ *   命中也不执行、不发文本，只记日志。「回复」不依赖权限，始终可用；
+ * - 命中并实际执行任一操作时标记该消息（handoff），普通聊天流程据此跳过同一批的 AI 回复；
+ *   未命中（或因无权限而未执行）时该消息仍照常进入 chat/ 流程；
  * - 某项的 MODERATION_*_PROMPT 为空即不启用该项；三项全空则不判断；
- * - 前提是机器人本身为该群群主/管理员：首次用 get_group_member_info 确认并缓存身份，
+ * - 判定撤回/禁言能否执行时用 get_group_member_info 确认机器人身份并缓存，失败按无权限处理；
  *   动作返回 retcode 1401 表示缓存身份过期，丢弃缓存、下条消息重查；
  * - 撤回/禁言失败时不发固定文本（不谎报已处理）；
  * - 依赖可缺省的 Decider（未配置 decider 时模块不生效）；power 为管理员 /启动 /停止 的持久化开关。
@@ -127,13 +129,6 @@ export class Moderation {
     // 保证「群管理命中」能先于聊天回复被看到；无论命中与否都在 finally 里收尾。
     this.deps.handoff?.begin(event.message_id);
     try {
-      // 机器人必须是本群群主或管理员才能执行撤回/禁言，否则记错误并跳过。
-      const botRole = await this.botRole(groupId, selfId);
-      if (botRole !== "owner" && botRole !== "admin") {
-        logger.error(`[moderation] 群 ${groupId} 机器人不是管理员（role=${botRole ?? "未知"}），跳过管理`);
-        return;
-      }
-
       // 取最近 contextMessages 条前置消息作为判定上下文。
       const prior = (this.context.get(groupId) ?? []).slice(-config.moderation.contextMessages);
       let scores: Record<string, number>;
@@ -153,14 +148,26 @@ export class Moderation {
       }
       // 各自独立触发，可能多项同时命中。
       const triggered = selectActions(scores, ops);
-      // 命中即视为群管理生效：标记该消息，聊天运行时据此跳过本批 AI 回复。
-      if (triggered.length > 0) this.deps.handoff?.mark(event.message_id);
-      // detail 记录每项「分数/阈值」便于调参；hit 记录本消息实际命中的操作。
+      // 撤回/禁言需要管理权限，reply 不需要；仅当命中里含撤回/禁言时才查机器人身份（带缓存）。
+      const needRole = triggered.some((op) => op.name !== "reply");
+      const canManage = needRole ? await this.canManage(groupId, selfId) : false;
+      // 实际可执行的操作：reply 始终可执行；撤回/禁言仅在机器人是群主/管理员时可执行。
+      const executable = triggered.filter((op) => op.name === "reply" || canManage);
+      // 因无权限被跳过的撤回/禁言：只记日志，不执行也不发文本。
+      for (const op of triggered) {
+        if (op.name !== "reply" && !canManage) {
+          logger.warn(`[moderation] 群 ${groupId} 机器人无管理权限，跳过 ${op.name} 消息 ${event.message_id}`);
+        }
+      }
+      // 只有实际会执行的操作才算群管理生效：标记该消息，聊天运行时据此跳过本批 AI 回复。
+      if (executable.length > 0) this.deps.handoff?.mark(event.message_id);
+      // detail 记录每项「分数/阈值」便于调参；hit 记录 decider 命中的操作，exec 记录实际执行的操作。
       const detail = ops.map((op) => `${op.name}=${(scores[op.name] ?? 0).toFixed(2)}/${op.threshold}`).join(" ");
       const hit = triggered.map((op) => op.name).join(",") || "无";
-      logger.info(`[moderation] 群 ${groupId} 用户 ${event.user_id} 消息 ${event.message_id} ${detail} -> ${hit}`);
-      // 依次执行命中项，顺序由 ops() 决定：撤回 → 禁言 → 回复。
-      for (const op of triggered) await this.act(op, event, groupId);
+      const exec = executable.map((op) => op.name).join(",") || "无";
+      logger.info(`[moderation] 群 ${groupId} 用户 ${event.user_id} 消息 ${event.message_id} ${detail} -> 命中 ${hit} 执行 ${exec}`);
+      // 依次执行可执行项，顺序由 ops() 决定：撤回 → 禁言 → 回复。
+      for (const op of executable) await this.act(op, event, groupId);
     } finally {
       this.deps.handoff?.settle(event.message_id);
     }
@@ -201,6 +208,12 @@ export class Moderation {
     if (max <= 0) list.length = 0;
     else if (list.length > max) list.splice(0, list.length - max);
     this.context.set(groupId, list);
+  }
+
+  /** 机器人是否为该群群主/管理员（撤回、禁言执行的前提）；身份结果带缓存，查询失败按无权限处理。 */
+  private async canManage(groupId: number, selfId: number): Promise<boolean> {
+    const role = await this.botRole(groupId, selfId);
+    return role === "owner" || role === "admin";
   }
 
   /** 取机器人在该群的身份（owner/admin/member…），进程内缓存；查询失败返回 undefined 且不缓存，下条消息重试。 */
