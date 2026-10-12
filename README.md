@@ -229,6 +229,21 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `MODERATION_BAN_PROMPT` / `_THRESHOLD` / `_TEXT` / `_SECONDS` | / 0.9 / / 600 | 禁言的提示词、阈值、固定回复文本、时长（秒） |
 | `MODERATION_REPLY_PROMPT` / `_THRESHOLD` / `_TEXT` | / 0.8 / | 回复的提示词、阈值、固定回复文本 |
 
+## 入群欢迎（可选）
+
+当有新成员加入指定群时，机器人 `@` 该成员并发送一条固定文本，不需要任何指令。它与群管理、聊天流程完全独立：不走 decider / DeepSeek，也不写入会话历史或长期记忆，群范围由自己的 `WELCOME_GROUPS` 决定（与 `MODERATION_GROUPS` 无关）。
+
+- 机器人自己被拉进群（入群者就是机器人自己）时不会 `@` 自己、不发言；
+- 受管理员 `/启动` `/停止` 约束：`/停止` 期间跳过（日志会记一条跳过信息）。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `WELCOME_ENABLED` | false | 是否启用入群欢迎 |
+| `WELCOME_GROUPS` | 空 | 生效的群号，逗号分隔 |
+| `WELCOME_TEXT` | 空 | 入群欢迎固定文本 |
+
+`WELCOME_ENABLED=true` 时，`WELCOME_GROUPS` / `WELCOME_TEXT` 任一为空都会在**启动时报错退出**，避免静默不发。
+
 ## 定时群发（可选）
 
 按一条 cron 表达式，在到点时向一组指定的群各发一条**固定的纯文本**消息，不需要任何指令。它与聊天流程完全独立：不经过 decider / DeepSeek，也不写入会话历史或长期记忆。
@@ -270,6 +285,8 @@ src/
 │   └── history.ts        会话消息记录
 ├── moderation/
 │   └── moderation.ts     群管理：decider 三问（撤回/禁言/回复）
+├── welcome/
+│   └── welcome.ts        入群欢迎：@ 新成员发固定文本（独立旁路）
 ├── decider/
 │   ├── questions.ts      判定输入/问题的类型与 noul 构造
 │   └── client.ts         通用判定请求（POST state + questions）

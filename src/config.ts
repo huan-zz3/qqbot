@@ -292,6 +292,15 @@ export const config = {
     // 固定文本（纯文本，只有一条）。
     text: str("SCHEDULE_TEXT"),
   },
+  // 入群欢迎：新成员入群时 @ 其发送一条固定文本（群范围独立于群管理）。
+  // 独立旁路：不走 decider，也不写会话历史/长期记忆；受 /启动 /停止 约束。
+  welcome: {
+    enabled: bool("WELCOME_ENABLED", false),
+    // 生效的群号，逗号分隔；与 MODERATION_GROUPS 无关。
+    groups: idSet("WELCOME_GROUPS"),
+    // 入群欢迎固定文本。
+    text: str("WELCOME_TEXT"),
+  },
 };
 
 /** 整个配置对象的类型；需要传递配置引用时用它。 */

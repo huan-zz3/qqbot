@@ -24,11 +24,12 @@ import { logger } from "./logger.js";
 import { ModerationHandoff } from "./moderation/handoff.js";
 import { Moderation } from "./moderation/moderation.js";
 import { NapcatClient } from "./napcat/client.js";
-import { isMessageEvent } from "./napcat/types.js";
+import { isGroupIncreaseEvent, isMessageEvent } from "./napcat/types.js";
 import { OpenCodeAgent } from "./opencode/agent.js";
 import { installProxy } from "./proxy.js";
 import { ScheduledMessenger } from "./schedule/scheduler.js";
 import { McpSearch } from "./search/mcp-search.js";
+import { Welcome } from "./welcome/welcome.js";
 
 async function main(): Promise<void> {
   // 最早安装代理：让后续所有 fetch（含 decider）都走 PROXY_URL；留空则直连。
@@ -106,15 +107,20 @@ async function main(): Promise<void> {
   // runtime/moderation 先声明再赋值：构造 client 时的事件回调闭包会引用它们。
   let runtime: ChatRuntime | undefined;
   let moderation: Moderation | undefined;
+  // 入群欢迎同样先声明再赋值，供事件回调闭包引用。
+  let welcome: Welcome | undefined;
   // 群管理命中后跳过 AI 回复的共享信号；未启用群管理、关了开关或没有 decider 时为 undefined。
   const handoff =
     decider && config.moderation.enabled && config.moderation.skipReply ? new ModerationHandoff() : undefined;
   const client = new NapcatClient((event) => {
-    // 非消息事件（心跳、通知等）不处理。
-    if (!isMessageEvent(event)) return;
-    // 同一条消息既进聊天流程也进群管理流程；群管理命中会通过 handoff 让聊天跳过该批回复。
-    runtime?.handle(event);
-    moderation?.handle(event);
+    // 消息事件进聊天与群管理流程；入群通知交给入群欢迎；其余事件（心跳/生命周期等）忽略。
+    if (isMessageEvent(event)) {
+      // 同一条消息既进聊天流程也进群管理流程；群管理命中会通过 handoff 让聊天跳过该批回复。
+      runtime?.handle(event);
+      moderation?.handle(event);
+      return;
+    }
+    if (isGroupIncreaseEvent(event)) welcome?.handle(event);
   });
   // 聊天文件读取：注入 callAction（需绑定 this）与上限；FILES_ENABLED 关闭时为 undefined，完全保持原有行为。
   const callAction: CallAction = (action, params) => client.callAction(action, params);
@@ -160,6 +166,19 @@ async function main(): Promise<void> {
     schedule.start();
   }
 
+  // 入群欢迎：独立旁路。启用时缺项即报错退出，避免「启用了却什么都不发」被无声忽略。
+  if (config.welcome.enabled) {
+    if (config.welcome.groups.size === 0) {
+      logger.error("WELCOME_ENABLED=true 但 WELCOME_GROUPS 为空");
+      process.exit(1);
+    }
+    if (!config.welcome.text) {
+      logger.error("WELCOME_ENABLED=true 但 WELCOME_TEXT 为空");
+      process.exit(1);
+    }
+    welcome = new Welcome({ client, power });
+  }
+
   // 打印一次装配结果，方便从日志确认哪些能力处于开启状态。
   const groups = [...config.bot.groups].join(",") || "（无）";
   const privateUsers = [...config.bot.privateUsers].join(",") || "（无）";
@@ -173,7 +192,7 @@ async function main(): Promise<void> {
       .filter(Boolean)
       .join(",") || "off";
   logger.info(
-    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? config.decider.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? config.decider.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();

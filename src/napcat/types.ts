@@ -59,8 +59,32 @@ export type MessageEvent = {
 };
 
 /**
+ * 群成员增加通知事件（OneBot notice/group_increase）：有成员加入群时由 NapCat 推送。
+ * sub_type 为 approve（管理员同意加群）/ invite（被邀请）；operator_id 是批准或邀请的人。
+ * 只保留入群欢迎用到的字段。
+ */
+export type GroupIncreaseEvent = {
+  /** 事件类型，固定为 "notice"。 */
+  post_type: "notice";
+  /** 通知类型，固定为 "group_increase"。 */
+  notice_type: "group_increase";
+  /** 子类型：approve / invite 等。 */
+  sub_type?: string;
+  /** 发生入群的群号。 */
+  group_id: number;
+  /** 新入群的成员 QQ 号。 */
+  user_id: number;
+  /** 批准/邀请入群的操作者 QQ 号。 */
+  operator_id?: number;
+  /** 收到该事件的 bot 自身 QQ 号。 */
+  self_id: number;
+  /** 事件时间（Unix 秒）。 */
+  time?: number;
+};
+
+/**
  * 任意 OneBot 事件：除消息事件外的所有事件（meta_event 生命周期/心跳、notice 等）
- * 只保证 post_type，其余字段保持宽松；上层用 isMessageEvent 筛出消息事件。
+ * 只保证 post_type，其余字段保持宽松；上层用 isMessageEvent / isGroupIncreaseEvent 筛出所需事件。
  */
 export type OneBotEvent =
   | MessageEvent
@@ -102,5 +126,19 @@ export function isMessageEvent(event: OneBotEvent): event is MessageEvent {
     event.post_type === "message" &&
     (event.message_type === "private" || event.message_type === "group") &&
     typeof event.message_id === "number"
+  );
+}
+
+/**
+ * 类型守卫：从任意事件中筛出「新成员入群」通知（供 index.ts 过滤）。
+ * 要求 post_type 为 "notice"、notice_type 为 "group_increase"，且 group_id/user_id 是数字，
+ * 避免脏事件进入入群欢迎流程。
+ */
+export function isGroupIncreaseEvent(event: OneBotEvent): event is GroupIncreaseEvent {
+  return (
+    event.post_type === "notice" &&
+    event.notice_type === "group_increase" &&
+    typeof event.group_id === "number" &&
+    typeof event.user_id === "number"
   );
 }
