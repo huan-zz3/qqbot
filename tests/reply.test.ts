@@ -73,6 +73,8 @@ test("system prompt lists stickers without prescribing style", () => {
   };
   const prompt = buildSystemPrompt(ctx, [], true);
   assert.match(prompt, /#3 猫猫叹气/);
+  // 明确点出记录里的 [表情包：…] 是展示文字，避免模型照抄成正文。
+  assert.match(prompt, /只是对表情的展示文字/);
   assert.match(prompt, /联网搜索/);
   assert.match(prompt, /- 李四：私聊里告诉你的：在北京工作/);
   assert.doesNotMatch(buildSystemPrompt({ ...ctx, stickers: [], memories: [] }, []), /表情包#|联网搜索|opencode|记得/);

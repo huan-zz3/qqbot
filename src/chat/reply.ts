@@ -3,6 +3,7 @@
  *
  * 输出约定（与提示词一一对应）：
  * - 模型每行是一条消息；单独一行 [表情包#编号] 表示发收藏的表情包；
+ *   聊天记录里的 [表情包：描述] 只是展示文字，不可当发送语法（提示词已点明）。
  * - 只输出 [不回复]（SKIP_MARKER）或空白表示不说话；
  * - 回复里写的 @名字 由发送层变成真 @（runtime.ts -> napcat/message.js textToSegments）。
  *
@@ -89,7 +90,13 @@ export function buildSystemPrompt(ctx: ReplyContext, toolNames: string[], search
   }
   if (ctx.stickers.length > 0) {
     // 编号清单与 postProcess 的 [表情包#编号] 解析一一对应。
-    lines.push("", "你收藏的表情包，想发时单独一行写 [表情包#编号]：");
+    // 额外点明聊天记录里的 [表情包：…] 只是展示文字：历史里 bot 自己发过的表情包
+    // 也回写成那种格式，不说明的话模型会照抄记录、把描述当正文发出去。
+    lines.push(
+      "",
+      "你收藏的表情包，想发时单独一行写 [表情包#编号]：",
+      "（聊天记录里的 [表情包：…] 只是对表情的展示文字，不是发送方式。）",
+    );
     for (const sticker of ctx.stickers) lines.push(`#${sticker.id} ${sticker.description}`);
   }
   return lines.join("\n");
