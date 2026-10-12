@@ -8,9 +8,6 @@
  * 组件按需创建：配置关闭或初始化失败时对应依赖为 undefined，各模块自行降级
  * （例如无 decider 时 gate 走兜底判定、搜索不可用时不给模型挂搜索工具）。
  */
-import { statSync } from "node:fs";
-import { isAbsolute } from "node:path";
-
 import { config } from "./config.js";
 import { ChatRuntime } from "./chat/runtime.js";
 import { FileStore, type CallAction } from "./chat/files.js";
@@ -27,6 +24,7 @@ import { Moderation } from "./moderation/moderation.js";
 import { NapcatClient } from "./napcat/client.js";
 import { isGroupIncreaseEvent, isMessageEvent } from "./napcat/types.js";
 import { OpenCodeAgent } from "./opencode/agent.js";
+import { parseDirs, type DirEntry } from "./opencode/dirs.js";
 import { installProxy } from "./proxy.js";
 import { ScheduledMessenger } from "./schedule/scheduler.js";
 import { McpSearch } from "./search/mcp-search.js";
@@ -66,18 +64,24 @@ async function main(): Promise<void> {
     await search.connect().catch((error: Error) => logger.warn(`联网搜索不可用：${error.message}`));
   }
 
-  // 只读 OpenCode（ACP）：显式启用但 cwd 不合法时直接退出，绝不静默不挂工具。
+  // 只读 OpenCode（ACP）：显式启用但目录配置不合法时直接退出，绝不静默不挂工具。
   let opencode: OpenCodeAgent | undefined;
   if (config.opencode.enabled) {
-    const cwd = config.opencode.cwd;
-    if (!isAbsolute(cwd) || !isDirectory(cwd)) {
-      logger.error(`OPENCODE_ENABLED=true 但 OPENCODE_CWD 不是存在的目录：${cwd || "（空）"}`);
+    let dirs: DirEntry[];
+    try {
+      dirs = parseDirs(config.opencode.cwd, config.opencode.dirsRaw);
+    } catch (error) {
+      logger.error(`OPENCODE_ENABLED=true 但目录配置不合法：${(error as Error).message}`);
+      process.exit(1);
+    }
+    if (dirs.length === 0) {
+      logger.error("OPENCODE_ENABLED=true 但未配置任何目录（OPENCODE_CWD / OPENCODE_DIRS 均为空）");
       process.exit(1);
     }
     opencode = new OpenCodeAgent({
       command: config.opencode.command,
       args: config.opencode.args,
-      cwd,
+      dirs,
       timeoutMs: config.opencode.timeoutMs,
       maxOutputChars: config.opencode.maxOutputChars,
       model: config.opencode.model,
@@ -242,7 +246,7 @@ async function main(): Promise<void> {
       .filter(Boolean)
       .join(",") || "off";
   logger.info(
-    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? config.decider.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? config.decider.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();
@@ -265,12 +269,3 @@ async function main(): Promise<void> {
 
 // 启动入口。
 void main();
-
-/** cwd 是否是一个已存在的目录（用于校验 OPENCODE_CWD）。 */
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}

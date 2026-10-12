@@ -221,8 +221,11 @@ export const config = {
     model: str("OPENCODE_MODEL"),
     // opencode 开始执行（模型调用该工具）时先发的一条提示文本；留空则不发，行为与未启用时一致。
     notice: str("OPENCODE_NOTICE_TEXT"),
-    // 固定仓库的绝对路径；为空则视为未配置（启用时会启动失败）。
+    // 主仓库的绝对路径；短名固定为 "default"。与 dirsRaw 至少一个非空（启用时否则启动失败）。
     cwd: str("OPENCODE_CWD"),
+    // 追加仓库列表，每项 `短名=绝对路径`，按逗号/空白切分（路径不能含空格/逗号）。
+    // 原始值原样带出，解析与校验交给 src/opencode/dirs.ts，不在此静默丢弃。
+    dirsRaw: str("OPENCODE_DIRS"),
     // 单次任务的总超时；超时会取消任务并杀掉子进程。
     timeoutMs: num("OPENCODE_TIMEOUT_MS", 180000),
     // 返回文本的截断上限，避免把超长输出整段塞给模型。

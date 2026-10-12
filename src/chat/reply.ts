@@ -202,8 +202,8 @@ export function planSends(parts: ReplyPart[]): Outgoing[] {
 }
 
 /**
- * 构造挂给模型的 opencode 工具：把模型给的任务交给只读的 OpenCodeAgent 在仓库里执行。
- * @param agent OpenCode 客户端。
+ * 构造挂给模型的 opencode 工具：把模型给的任务交给只读的 OpenCodeAgent 在**指定仓库**里执行。
+ * @param agent OpenCode 客户端；其预定义目录清单用于生成 directory 参数的 enum 与描述。
  * @param context 可选的懒加载上下文（文本类文件内容）；仅在工具被真正调用时求值，与任务一并交给 OpenCode。
  * @param onStart 可选的“开始执行”通知；本次工具实例首次真正调用时触发一次（同批多次调用也只触发一次）。
  *   契约：它必须自行处理失败、不得抛出——否则会把探索流程一并中断。
@@ -211,18 +211,28 @@ export function planSends(parts: ReplyPart[]): Outgoing[] {
 export function openCodeTool(agent: OpenCodeAgent, context?: () => Promise<string>, onStart?: () => void | Promise<void>): Tool {
   // 只属于本次工具实例的标记：保证同一批只通知一次。
   let notified = false;
+  // 预定义仓库短名：用于向模型列出可选目录，并在调用时校验（只允许这几个）。
+  const names = agent.directories().map((dir) => dir.name);
+  const nameList = names.join("、");
   return {
     definition: {
       type: "function",
       function: {
         name: "opencode",
-        description: "在某个代码仓库里检索、阅读代码并回答相关问题（只读，不能修改文件）。",
+        description:
+          `在指定的代码仓库里检索、阅读代码并回答相关问题（只读，不能修改文件）。` +
+          `可进入的仓库（directory 取值）：${nameList}。`,
         parameters: {
           type: "object",
           properties: {
             prompt: { type: "string", description: "要 OpenCode 在仓库里完成的任务或问题" },
+            directory: {
+              type: "string",
+              enum: names,
+              description: `要进入的仓库短名，取值：${nameList}`,
+            },
           },
-          required: ["prompt"],
+          required: ["prompt", "directory"],
         },
       },
     },
@@ -230,6 +240,11 @@ export function openCodeTool(agent: OpenCodeAgent, context?: () => Promise<strin
       // 参数来自模型，需做类型检查；空 prompt 返回错误文本给模型自行修正。
       const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
       if (!prompt) return "prompt 不能为空";
+      // directory 必填且必须是预定义短名；不合法直接反馈（不调用后端，避免把错误藏进任务里）。
+      const directory = typeof args.directory === "string" ? args.directory.trim() : "";
+      if (!names.includes(directory)) {
+        return `directory 必须是以下之一：${nameList}${directory ? `（收到：${directory}）` : ""}`;
+      }
       // 探索即将开始：先通知（仅首次），再求值文件上下文。
       if (onStart && !notified) {
         notified = true;
@@ -238,7 +253,7 @@ export function openCodeTool(agent: OpenCodeAgent, context?: () => Promise<strin
       // 只在工具真的被调用时才取文件上下文（用到才下载）。
       const extra = context ? (await context()).trim() : "";
       if (extra) logger.info(`[opencode] 注入文件上下文 ${extra.length} 字符`);
-      return agent.run(extra ? `${extra}\n\n${prompt}` : prompt);
+      return agent.run(extra ? `${extra}\n\n${prompt}` : prompt, directory);
     },
   };
 }

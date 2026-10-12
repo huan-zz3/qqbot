@@ -15,7 +15,7 @@
  * - 不静默：任何一步失败都向上抛出（由工具层转成给模型的错误文本），并在此处留日志；
  *   子进程的 stderr 会被收集，失败时随错误信息一起暴露，便于排查。
  *
- * 依赖 config.opencode（command、args、cwd、timeoutMs、maxOutputChars）。
+ * 依赖 config.opencode（command、args、dirs、timeoutMs、maxOutputChars）。
  */
 import { spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
@@ -24,6 +24,7 @@ import * as acp from "@agentclientprotocol/sdk";
 
 import { logger } from "../logger.js";
 import { childEnv } from "./env.js";
+import { resolveDir, type DirEntry } from "./dirs.js";
 import { resolveModelValue } from "./model.js";
 import { decidePermission } from "./permission.js";
 
@@ -31,7 +32,8 @@ import { decidePermission } from "./permission.js";
 export type OpenCodeOptions = {
   command: string;
   args: string[];
-  cwd: string;
+  /** 已校验的预定义仓库目录（短名 → 绝对路径）；每次调用用短名选一个。 */
+  dirs: ReadonlyArray<DirEntry>;
   timeoutMs: number;
   maxOutputChars: number;
   /** OPENCODE_MODEL：要指定的模型（provider/model）；留空则沿用 opencode 默认。 */
@@ -57,15 +59,23 @@ export class OpenCodeAgent {
   constructor(private readonly options: OpenCodeOptions) {}
 
   /**
+   * 已校验的预定义仓库目录；供工具层生成短名清单（enum/description）。
+   */
+  directories(): ReadonlyArray<DirEntry> {
+    return this.options.dirs;
+  }
+
+  /**
    * 排队执行一次只读任务。
    * @param prompt 交给 OpenCode 的任务或问题。
+   * @param directory 要进入的预定义仓库短名（必填）；未知短名会让本次调用抛错。
    * @returns 任务结束时 OpenCode 的文本答复（可能为空或已截断）；失败时抛出。
    */
-  run(prompt: string): Promise<string> {
+  run(prompt: string, directory: string): Promise<string> {
     // 无论前一次成功或失败，都接着执行（失败不影响后续排队）。
     const next = this.queue.then(
-      () => this.execute(prompt),
-      () => this.execute(prompt),
+      () => this.execute(prompt, directory),
+      () => this.execute(prompt, directory),
     );
     // 队列自身吞掉结果，只作为「上一个是否结束」的标记，避免未处理的拒绝。
     this.queue = next.then(
@@ -85,10 +95,11 @@ export class OpenCodeAgent {
    * 单次任务的完整流程：spawn -> initialize -> session/new -> prompt -> stop -> 清理。
    * 所有异常都向上抛出，并带上子进程 stderr 片段便于定位。
    */
-  private async execute(prompt: string): Promise<string> {
-    const { command, args, cwd, timeoutMs, maxOutputChars } = this.options;
+  private async execute(prompt: string, directory: string): Promise<string> {
+    const { command, args, dirs, timeoutMs, maxOutputChars } = this.options;
+    const cwd = resolveDir(dirs, directory);
     const startedAt = Date.now();
-    logger.info(`[opencode] 开始 cwd=${cwd} prompt=${summarize(prompt)}`);
+    logger.info(`[opencode] 开始 目录=${directory}(${cwd}) prompt=${summarize(prompt)}`);
 
     const child = spawn(command, args, { cwd, env: childEnv(), stdio: ["pipe", "pipe", "pipe"] });
     this.child = child;

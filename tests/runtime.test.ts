@@ -505,6 +505,7 @@ test("a text file from the current speaker is injected into the opencode call", 
   // 假 opencode：记录收到的 prompt（应含文件内容）。
   const agentPrompts: string[] = [];
   (runtime as unknown as { deps: { opencode: unknown } }).deps.opencode = {
+    directories: () => [{ name: "default", path: "/tmp/repo" }],
     run: async (prompt: string) => {
       agentPrompts.push(prompt);
       return "看完了";
@@ -526,7 +527,7 @@ test("a text file from the current speaker is injected into the opencode call", 
               message: {
                 content: null,
                 tool_calls: [
-                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "查看文件" }) } },
+                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "查看文件", directory: "default" }) } },
                 ],
               },
             },
@@ -558,6 +559,7 @@ test("an unsupported file is reported in the opencode context", async () => {
   };
   const agentPrompts: string[] = [];
   (runtime as unknown as { deps: { opencode: unknown } }).deps.opencode = {
+    directories: () => [{ name: "default", path: "/tmp/repo" }],
     run: async (prompt: string) => {
       agentPrompts.push(prompt);
       return "看完了";
@@ -574,7 +576,7 @@ test("an unsupported file is reported in the opencode context", async () => {
               message: {
                 content: null,
                 tool_calls: [
-                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "看看" }) } },
+                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "看看", directory: "default" }) } },
                 ],
               },
             },
@@ -603,6 +605,7 @@ test("files from other senders are not injected", async () => {
   };
   const agentPrompts: string[] = [];
   (runtime as unknown as { deps: { opencode: unknown } }).deps.opencode = {
+    directories: () => [{ name: "default", path: "/tmp/repo" }],
     run: async (prompt: string) => {
       agentPrompts.push(prompt);
       return "看完了";
@@ -619,7 +622,7 @@ test("files from other senders are not injected", async () => {
               message: {
                 content: null,
                 tool_calls: [
-                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "看看" }) } },
+                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "看看", directory: "default" }) } },
                 ],
               },
             },

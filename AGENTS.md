@@ -25,6 +25,7 @@
 - 联网搜索靠外部 MCP 服务器：连接断了或服务器挂了就置为不可用并打日志，之后按指数退避自动重连（首次 `SEARCH_MCP_RECONNECT_MIN_MS`，×2 封顶 `SEARCH_MCP_RECONNECT_MAX_MS`）、成功即恢复，无需重启；工具清单在启动时拉取一次（`search/mcp-search.ts`）。
 - **bot 自身出网靠 undici `ProxyAgent`（`proxy.ts`），只作用于本进程**；spawn 出的 `opencode acp` 是独立进程，拿不到那个 dispatcher，只能靠环境变量。`opencode/env.ts` 的 `childEnv` 按 `PROXY_URL` 注入 `http_proxy`/`https_proxy`/`all_proxy`，并把本机地址加进 `no_proxy`。systemd 服务环境干净（没有 `http_proxy`），若不注入，opencode 会直连 models.dev / 模型 provider / 远程 MCP 而超时，任务跑不完。
 - **`opencode acp` 没有 `--model`，也无视命令行里选的模型**；不指定就用自己的默认模型。给它选模型只能经 ACP：`session/new` 响应里的 `configOptions`（id/category=`model`）→ `session/set_config_option`（`agent.ts` 调用，值来自 `OPENCODE_MODEL`，纯逻辑在 `opencode/model.ts`，配了却不在可选列表内会报错）。全局 opencode config 的 `model` 是 `providerID` 对象且 provider 名大小写必须与注册的 id 一致（本机是 `deepseek`），写 `DeepSeek/...` 不生效。
+- **OpenCode 支持多个预定义仓库、由模型用短名选择**：`OPENCODE_CWD`（单个绝对路径，短名固定 `default`）+ `OPENCODE_DIRS`（每项 `短名=绝对路径`，逗号/空格分隔，路径不能含空格/逗号）。解析/校验在 `opencode/dirs.ts`（纯逻辑，可单测），原始值由 `config.ts` 原样带出、`index.ts` 校验失败即 `exit(1)`。工具的 `directory` 参数**必填**、`enum` 只列这些短名，handler 先校验再调 `agent.run(prompt, directory)`（未知短名返回可读错误文本、不调后端）。每次 `run` 新开子进程、用完即杀，所以"切换仓库"就是换个 spawn 的 `cwd`。
 - @/回复 bot 只是给 decider **降低阈值**的提示，不是强制回复（`gate.ts` `decide`）。
 - 自定义「什么情况下该回复」提示词（`GATE_REPLY_QUESTION_PROMPT`/`_TRUE_PROMPT`/`_FALSE_PROMPT`）由 `gate.ts` `buildQuestions` 分别**追加**到 `should_reply` 的正文/true/false 之后，留空不追加、不替换；启动日志 `reply_prompt=` 列出已配置的位。
 - **累计强制回复**（`GATE_FORCE_REPLY_ENABLED`/`_GROUPS`/`_MESSAGES`）：仅对名单内的群**各自**累计「自上次发言/上次强制以来的群消息数」（`runtime.ts` 会话字段 `sinceBot`），达到条数时该群**下一批强制回复一次**——只覆盖回复结论（gate 的 `ctx.force`，来源标 `rule`），搜索建议仍来自 decider。清零点有三处：机器人发言（`recordSent`）、**强制判定作出时**（即便模型随后输出 `[不回复]`）、`/停止`（`dropPending`）。启用时群必须都在 `BOT_GROUPS` 内且条数为正，否则 `index.ts` 启动即 `process.exit(1)`（不静默失效）。仅群聊，私聊恒为 0；启动日志 `force_reply=` 列出范围与条数。
@@ -51,7 +52,7 @@
 - `src/exec/cron-exec.ts` 定时执行本地 shell 命令（多条，只写日志，不受电源约束）；cron 工厂 `createCronJob` 在 `scheduler.ts`。
 - `src/moderation/moderation.ts` 群管理（decider 三问，判定始终进行；撤回/禁言需管理权限，回复始终可用）；`handoff.ts` 群管理与聊天运行时的协调信号。
 - `src/welcome/welcome.ts` 入群欢迎（`notice/group_increase`，@ 新成员发固定文本，独立旁路）。
-- `src/opencode/` 只读 OpenCode（ACP）：`agent.ts` 进程编排、`env.ts` 子进程环境（代理）、`model.ts` 模型选择、`permission.ts` 权限裁决。
+- `src/opencode/` 只读 OpenCode（ACP）：`agent.ts` 进程编排、`env.ts` 子进程环境（代理）、`dirs.ts` 预定义仓库目录解析/校验、`model.ts` 模型选择、`permission.ts` 权限裁决。
 - `deploy/` systemd unit；`scripts/build-sea.mjs` 打包单文件可执行。
 
 ## 约定

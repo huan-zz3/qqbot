@@ -23,7 +23,7 @@
 - 看得懂图片：普通图片也用 deepseek-flash 识图，以 `[图片：描述]` 出现在聊天记录里。
 - 连发多条，长了就合并转发：每行一条消息，按打字速度间隔发出；回复长到超过 5 行或 300 字时，正文打包成一条合并转发，不刷屏。
 - 联网搜索：decider 觉得可能需要查资料时，把一个远程 MCP 搜索服务器（多引擎搜索 + 抓取网页正文）暴露的工具挂给模型，搜不搜、抓不抓由模型决定。
-- 只读问代码（可选）：让模型在固定的代码仓库里检索、阅读并回答问题（`opencode acp`）。权限请求一律拒绝，不能改文件、跑命令。
+- 只读问代码（可选）：让模型在预定义的代码仓库里检索、阅读并回答问题（`opencode acp`，可用短名切换仓库）。权限请求一律拒绝，不能改文件、跑命令。
 - 长期记忆：按人记住聊过的事，群聊和私聊分开记；私聊里说的，到群里它也知道，提不提由它自己判断。
 - @ 显示名字：被 @ 的人显示群名片，不会把 QQ 号念出来；它回复里写的 `@名字` 会发成真正的 @。
 - 分得清谁在对谁说：聊天记录写成 `说话人 → 对象：正文（引用 某人的「原文」）`，对象来自 @、再退到被引用消息的作者；decider 的输入里也有 `to` / `quoting`。回复机器人的消息却在 @ 别人，就是在跟那个人说。
@@ -142,14 +142,14 @@ journalctl -u qqbot -f -o cat   # 看每条消息的 decider 分数和决定
 
 ### 5. 只读 OpenCode（可选）
 
-给模型加一个在固定代码仓库里检索、阅读并回答问题的能力，底层是 `opencode acp`（见 [ACP 文档](https://opencode.ai/v2/docs/cli/acp/)）。它是**只读**的：客户端不声明任何文件系统 / 终端能力，且对所有权限请求一律拒绝，因此 OpenCode 无法执行命令或改动文件。
+给模型加一个在预定义代码仓库里检索、阅读并回答问题的能力，底层是 `opencode acp`（见 [ACP 文档](https://opencode.ai/v2/docs/cli/acp/)）。它是**只读**的：客户端不声明任何文件系统 / 终端能力，且对所有权限请求一律拒绝，因此 OpenCode 无法执行命令或改动文件。
 
 前提：
 
 - 服务器上安装 [OpenCode](https://opencode.ai) 并完成 `opencode auth login`（用它自己的登录态，与本项目的 MCP 联网搜索无关）；
-- `.env` 里设 `OPENCODE_ENABLED=true` 与 `OPENCODE_CWD=/绝对路径/到/仓库`（非绝对路径或不是已存在的目录时，启动会报错退出，不会静默失效）。
+- `.env` 里设 `OPENCODE_ENABLED=true`，并配置**至少一个**仓库目录：主目录 `OPENCODE_CWD=/绝对路径/到/仓库`（短名固定为 `default`），或用 `OPENCODE_DIRS=短名=绝对路径 ...` 追加更多仓库（逗号/空格分隔，路径不能含空格/逗号）。任一目录非绝对路径或不是已存在的目录时，启动会报错退出，不会静默失效。
 
-调用与否由模型自己决定；一次任务同步执行，超时会先取消再杀掉子进程。白名单内的群 / 私聊都能触发，结果发在原会话。提示词里给模型的说明可用 `OPENCODE_PROMPT` 自定义，用来框定「什么情况下该调用」。可用 `OPENCODE_NOTICE_TEXT` 在探索开始时先发一条提示（例如「正在查看，请稍等…」），留空则不发；该提示会作为一条普通消息发出并写入会话历史，因此群聊里随后的正式回复可能带上对最后一条消息的引用。
+调用时由**模型用短名选择**要进入的仓库（工具参数 `directory` 为必填、取值限定为这些短名）；一次调用只进一个仓库。调用与否由模型自己决定；一次任务同步执行，超时会先取消再杀掉子进程。白名单内的群 / 私聊都能触发，结果发在原会话。提示词里给模型的说明可用 `OPENCODE_PROMPT` 自定义，用来框定「什么情况下该调用」。可用 `OPENCODE_NOTICE_TEXT` 在探索开始时先发一条提示（例如「正在查看，请稍等…」），留空则不发；该提示会作为一条普通消息发出并写入会话历史，因此群聊里随后的正式回复可能带上对最后一条消息的引用。
 
 **必须显式指定模型**：`opencode acp` 没有 `--model` 参数，也无视命令行里选中的模型，不指定就会用它自己的默认模型（可能又贵又不是你要的，且你那台机器上全局 config 写的 `DeepSeek/deepseek-v4-pro` 因 provider 大小写不匹配而没生效）。因此用 `OPENCODE_MODEL=<provider>/<model>`（如 `deepseek/deepseek-flash`）指定；bot 会在建好会话后经 ACP 的 `session/set_config_option`（`configId=model`）设置它。留空则沿用 opencode 默认（README 不推荐）。配了却不在可选模型内会在任务失败时报出可选值，不做静默回退。
 
@@ -180,7 +180,8 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `GATE_FORCE_REPLY_GROUPS` | | 生效的群号，逗号分隔；各群独立计数与清零。必须都在 `BOT_GROUPS` 内，启用时不能为空，否则启动报错退出 |
 | `GATE_FORCE_REPLY_MESSAGES` | 20 | 触发条数；启用时必须为正，否则启动报错退出 |
 | `DECIDER_API_URL` / `DECIDER_MODEL` / `DECIDER_API_KEY` | Perplexity Decisions | 通用判定接口的端点 / 模型 / 密钥；`DECIDER_API_URL` 为空即停用 decider，退回规则兜底 |
-| `OPENCODE_ENABLED` / `OPENCODE_CWD` | false / | 启用只读 OpenCode；`CWD` 是允许访问的仓库绝对路径 |
+| `OPENCODE_ENABLED` / `OPENCODE_CWD` | false / | 启用只读 OpenCode；`CWD` 是可访问的主仓库绝对路径（短名固定 `default`） |
+| `OPENCODE_DIRS` | | 追加的可访问仓库，每项 `短名=绝对路径`，逗号/空格分隔（路径不能含空格/逗号）；调用时模型用短名选择 |
 | `OPENCODE_PROMPT` | （内置只读说明） | 提示词里给模型的 opencode 说明，用来框定「什么情况下该调用」 |
 | `OPENCODE_MODEL` | | 给 ACP 会话指定的模型（`provider/model`，如 `deepseek/deepseek-flash`）；留空用 opencode 自己的默认（可能很贵） |
 | `OPENCODE_NOTICE_TEXT` | | opencode 开始执行时先发出的提示文本；留空则不发（会写入会话历史） |
@@ -321,7 +322,7 @@ src/
 │   └── client.ts         通用判定请求（POST state + questions）
 ├── llm/deepseek.ts       deepseek-flash：工具循环、识图、JSON（失败重试一次）
 ├── search/               MCP 联网搜索客户端
-├── opencode/             只读 OpenCode（ACP）：进程编排、子进程环境（代理）、模型选择、权限裁决
+├── opencode/             只读 OpenCode（ACP）：进程编排、子进程环境（代理）、目录选择、模型选择、权限裁决
 └── cli/learn-history.ts  从历史记录补学记忆
 ```
 
@@ -338,7 +339,7 @@ pnpm typecheck
 - NapCat 属于非官方客户端，QQ 账号有被风控的风险，建议用小号。
 - 联网搜索依赖外部 MCP 服务器（streamable HTTP）的可用性；它挂掉的期间搜索暂不挂载，之后按指数退避自动重连、成功后自动恢复，无需重启。
 - 记忆和表情包描述会把群友的发言交给 DeepSeek 处理，请在群里告知大家。
-- 启用只读 OpenCode 后，白名单群 / 私聊里的消息都可能驱动它读取 `OPENCODE_CWD` 仓库内容并转发到会话里；只读约束挡的是改动与执行，挡不住信息外泄，请自行评估仓库敏感度。
+- 启用只读 OpenCode 后，白名单群 / 私聊里的消息都可能驱动它读取 `OPENCODE_CWD` / `OPENCODE_DIRS` 里任一仓库的内容并转发到会话里；只读约束挡的是改动与执行，挡不住信息外泄，请自行评估仓库敏感度。
 
 ## 致谢
 
