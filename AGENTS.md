@@ -32,6 +32,7 @@
 - 提示词只给事实，不给规则或示例句：不写长度/语气要求，不放例句（模型会照抄）（`reply.ts` `buildSystemPrompt`）。
 - 模型输出约定：`[不回复]`（`SKIP_MARKER`）表示不说；`[表情包#编号]` 单独一行发收藏表情；收到的图片显示为 `[图片：描述]`，QQ 小黄脸显示/收发按 `[名称]`（名字表在 `napcat/faces.ts`）。回复里写的 `@名字` 会发成真 @。
 - 定时群发（`src/schedule/scheduler.ts`）是**独立旁路**：不走 decider/DeepSeek，也不进会话历史/记忆；时区**写死 `Asia/Shanghai`**。`SCHEDULE_ENABLED=true` 时缺项或 cron 非法会在启动时 `process.exit(1)`（不静默不发）。到点受 `/启动` `/停止` 约束。用外部依赖 `cron`（`CronJob`）。
+- 定时执行本地 shell 命令（`src/exec/cron-exec.ts`）同为**独立旁路**，但**不受 `/启动` `/停止` 约束**（系统级任务）。多条命令用编号式 env：`EXEC_<n>_CRON` + `EXEC_<n>_SHELL` 成对，`config.ts` 的 `execJobs()` 扫描 `process.env` 键名、按编号升序（允许跳号），空值不丢弃、交 `index.ts` 校验；`EXEC_ENABLED=true` 时任务数为 0、成对缺一、或 cron 非法都启动即 `process.exit(1)`。时区同为 `Asia/Shanghai`；cron 工厂 `createCronJob`/`CRON_TIMEZONE` 从 `scheduler.ts` 导出共用。每条命令有重叠守卫（上一次未跑完则跳过并记日志）；只写日志，输出按 `EXEC_MAX_OUTPUT_CHARS` 截断并注明原始字符数。
 - 群管理（`src/moderation/`）的 decider 三问（撤回/禁言/回复）**始终判定**，不再以机器人在群里的身份为前提；只有撤回/禁言需要机器人是该群群主/管理员（命中时才用 `get_group_member_info` 查并缓存，失败按无权限处理），无权限时这两项命中也不执行、不发文本，只记日志；**「回复」不依赖权限，始终可用**。`handoff.mark` 以**实际执行**为准：命中却因无权限未执行的项不算数，该消息照常进聊天流程（`moderation.ts`、`handoff.ts`）。
 - 入群欢迎（`src/welcome/welcome.ts`）是**独立旁路**：监听 OneBot `notice/group_increase` 事件，@ 新成员发 `WELCOME_TEXT`；群范围是独立的 `WELCOME_GROUPS`（与 `MODERATION_GROUPS` 无关），不走 decider、不进聊天历史/记忆。`WELCOME_ENABLED=true` 时 `WELCOME_GROUPS`/`WELCOME_TEXT` 任一为空会启动即 `process.exit(1)`；受 `/启动` `/停止` 约束；入群者就是机器人自己时跳过。入站事件在 `index.ts` 由 `isMessageEvent` 之外新增 `isGroupIncreaseEvent` 分流（`napcat/types.ts`）。
 
@@ -47,6 +48,7 @@
 - `src/llm/deepseek.ts` deepseek-flash 工具循环（含工具额度用尽时的收尾指令）、识图、JSON（失败重试一次）。
 - `src/search/mcp-search.ts` MCP 联网搜索客户端（连接、工具映射、调用）；`src/cli/learn-history.ts` 历史补学。
 - `src/schedule/scheduler.ts` 定时群发（cron，固定 Asia/Shanghai，受电源开关约束）。
+- `src/exec/cron-exec.ts` 定时执行本地 shell 命令（多条，只写日志，不受电源约束）；cron 工厂 `createCronJob` 在 `scheduler.ts`。
 - `src/moderation/moderation.ts` 群管理（decider 三问，判定始终进行；撤回/禁言需管理权限，回复始终可用）；`handoff.ts` 群管理与聊天运行时的协调信号。
 - `src/welcome/welcome.ts` 入群欢迎（`notice/group_increase`，@ 新成员发固定文本，独立旁路）。
 - `src/opencode/` 只读 OpenCode（ACP）：`agent.ts` 进程编排、`env.ts` 子进程环境（代理）、`model.ts` 模型选择、`permission.ts` 权限裁决。

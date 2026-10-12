@@ -197,6 +197,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `MEMORY_LEARN_BATCH` | 30 | 未整理的消息攒够这么多就整理（仅限它最近 30 分钟说过话的会话） |
 | `PROXY_URL` | | 填 HTTP 代理地址（如 `http://127.0.0.1:7890`）则所有联网请求都走它；留空直连 |
 | `SCHEDULE_ENABLED` / `SCHEDULE_GROUPS` | false / | 定时群发：按 `SCHEDULE_CRON` 向这些群各发一条 `SCHEDULE_TEXT` |
+| `EXEC_ENABLED` | false | 定时执行本地 shell 命令（多条，只写日志；不受 `/启动` `/停止` 约束） |
 
 ## 表情包与记忆
 
@@ -267,6 +268,27 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 - 发送复用 NapCat 客户端的串行节流（`NAPCAT_SEND_INTERVAL_MS`），多群发送不会瞬时爆发；某个群发送失败只记日志，不影响其它群。
 - `SCHEDULE_ENABLED=true` 时，`SCHEDULE_CRON` / `SCHEDULE_GROUPS` / `SCHEDULE_TEXT` 任一为空、或 cron 表达式非法，都会在**启动时报错退出**，避免静默不发。
 
+## 定时执行命令（可选）
+
+按 cron 在本机执行 **shell 命令**，可配多条，每条自带一个 cron。与聊天流程完全独立：不发消息、不经过 decider / DeepSeek，也不写入会话历史或长期记忆；**不受 `/启动` `/停止` 约束**（系统级任务，与 bot 是否参与聊天无关）。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `EXEC_ENABLED` | false | 是否启用 |
+| `EXEC_<n>_CRON` | 空 | 第 n 条命令的 cron（如 `0 8 * * *`，每天 08:00） |
+| `EXEC_<n>_SHELL` | 空 | 第 n 条命令的 shell 命令串（经 `/bin/sh`，可用管道） |
+| `EXEC_TIMEOUT_MS` | 60000 | 单条命令执行超时，超时即终止子进程 |
+| `EXEC_MAX_OUTPUT_CHARS` | 2000 | 日志里每条命令 stdout/stderr 的截断上限 |
+
+说明：
+
+- 编号 `n` 从 1 起，**允许跳号**（组装时按编号升序）；`EXEC_<n>_CRON` 与 `EXEC_<n>_SHELL` 必须成对。
+- **时区固定为 `Asia/Shanghai`**，按北京时间写 cron（与定时群发一致）。
+- 命令继承 bot 进程的环境变量与工作目录（进程 cwd）。
+- 到点执行时按结果写日志：开始（含完整命令）、成功、失败（退出码/信号）、超时、输出过大、重叠跳过，输出超限会注明原始字符数。
+- 每条命令有重叠守卫：上一次仍在执行时本次跳过并记日志，避免长命令堆叠。
+- `EXEC_ENABLED=true` 时，任务数为 0、任一条成对变量缺一、或 cron 表达式非法，都会在**启动时报错退出**，避免静默不执行。
+
 ## 项目结构
 
 ```text
@@ -276,7 +298,9 @@ src/
 ├── proxy.ts              网络代理（PROXY_URL）
 ├── napcat/               WS 客户端、OneBot 类型、消息段渲染、QQ 表情表
 ├── schedule/
-│   └── scheduler.ts      定时群发：按 cron 向指定群发固定文本
+│   └── scheduler.ts      定时群发：按 cron 向指定群发固定文本（含共用的 createCronJob / 时区）
+├── exec/
+│   └── cron-exec.ts      定时执行本地 shell 命令（多条，只写日志）
 ├── chat/
 │   ├── runtime.ts        会话：防抖、判断、回复、发送、触发记忆整理
 │   ├── gate.ts           decider 问题与阈值、无 decider 时的兜底

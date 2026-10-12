@@ -19,6 +19,7 @@ import { MemoryStore } from "./chat/memory.js";
 import { PowerSwitch } from "./chat/power.js";
 import { StickerStore, describeSticker } from "./chat/stickers.js";
 import { createDecider } from "./decider/client.js";
+import { CronExecutor } from "./exec/cron-exec.js";
 import { DEEPSEEK_MODEL, completeJson, describeImage } from "./llm/deepseek.js";
 import { logger } from "./logger.js";
 import { ModerationHandoff } from "./moderation/handoff.js";
@@ -179,6 +180,37 @@ async function main(): Promise<void> {
     welcome = new Welcome({ client, power });
   }
 
+  // 定时执行本地 shell 命令：启用时逐项校验，任务为空 / 成对变量缺一 / cron 非法即报错退出，避免静默不执行。
+  let cronExec: CronExecutor | undefined;
+  if (config.exec.enabled) {
+    if (config.exec.jobs.length === 0) {
+      logger.error("EXEC_ENABLED=true 但未配置任何 EXEC_<n>_CRON / EXEC_<n>_SHELL");
+      process.exit(1);
+    }
+    for (const job of config.exec.jobs) {
+      if (!job.cron) {
+        logger.error(`EXEC_ENABLED=true 但 EXEC_${job.index}_CRON 为空`);
+        process.exit(1);
+      }
+      if (!job.shell) {
+        logger.error(`EXEC_ENABLED=true 但 EXEC_${job.index}_SHELL 为空`);
+        process.exit(1);
+      }
+    }
+    try {
+      cronExec = new CronExecutor({
+        jobs: config.exec.jobs,
+        timeoutMs: config.exec.timeoutMs,
+        maxOutputChars: config.exec.maxOutputChars,
+      });
+    } catch (error) {
+      // cron 表达式非法会在构造时抛出（错误已点名 EXEC_<n>）。
+      logger.error(`定时执行命令配置非法：${(error as Error).message}`);
+      process.exit(1);
+    }
+    cronExec.start();
+  }
+
   // 累计强制回复：启用时逐项校验，缺项或配错即报错退出，避免「开了却没生效」被无声忽略。
   if (config.gate.forceReply.enabled) {
     if (config.gate.forceReply.messages <= 0) {
@@ -210,7 +242,7 @@ async function main(): Promise<void> {
       .filter(Boolean)
       .join(",") || "off";
   logger.info(
-    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? config.decider.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? config.decider.model : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? config.opencode.cwd : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();
@@ -220,6 +252,7 @@ async function main(): Promise<void> {
     logger.info("退出中…");
     opencode?.dispose();
     schedule?.dispose();
+    cronExec?.dispose();
     await search?.dispose().catch(() => undefined);
     await stickers?.flush().catch(() => undefined);
     await memory?.flush().catch(() => undefined);

@@ -57,6 +57,24 @@ function idSet(name: string): Set<number> {
 }
 
 /**
+ * 读「定时执行命令」任务：扫描 process.env 里形如 EXEC_<n>_CRON / EXEC_<n>_SHELL 的键，
+ * 收集去重后的编号并按升序组装成任务数组（允许跳号）。
+ * 空值原样保留（trim 后为空串），交由 index.ts 逐项校验，绝不在此静默丢弃。
+ */
+function execJobs(): { index: number; cron: string; shell: string }[] {
+  const indices = new Set<number>();
+  for (const key of Object.keys(process.env)) {
+    const match = /^EXEC_(\d+)_(?:CRON|SHELL)$/.exec(key);
+    if (match) indices.add(Number(match[1]));
+  }
+  return [...indices].sort((a, b) => a - b).map((index) => ({
+    index,
+    cron: str(`EXEC_${index}_CRON`),
+    shell: str(`EXEC_${index}_SHELL`),
+  }));
+}
+
+/**
  * 读文本文件（UTF-8）并去掉首尾空白。path 为空返回空串；
  * 读取失败直接抛错终止启动（绝不静默回退），错误信息带上变量名与原始路径以便排查。
  */
@@ -310,6 +328,17 @@ export const config = {
     groups: idSet("WELCOME_GROUPS"),
     // 入群欢迎固定文本。
     text: str("WELCOME_TEXT"),
+  },
+  // 定时执行本地 shell 命令（多条）：每条自带 cron（时区固定 Asia/Shanghai），到点在本机执行，只写日志。
+  // 独立旁路：不发消息、不进聊天历史/记忆，也不受 /启动 /停止 约束。配置非法时启动即报错退出（见 index.ts）。
+  exec: {
+    enabled: bool("EXEC_ENABLED", false),
+    // 扫描 EXEC_<n>_CRON / EXEC_<n>_SHELL，按编号升序；允许跳号。
+    jobs: execJobs(),
+    // 单条命令执行超时；超时终止子进程。
+    timeoutMs: num("EXEC_TIMEOUT_MS", 60000),
+    // 日志里每条命令 stdout/stderr 的截断上限（字符）。
+    maxOutputChars: num("EXEC_MAX_OUTPUT_CHARS", 2000),
   },
 };
 

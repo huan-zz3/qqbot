@@ -16,8 +16,24 @@ import { logger } from "../logger.js";
 import type { NapcatClient } from "../napcat/client.js";
 import { textSegment } from "../napcat/message.js";
 
-// 定时群发固定时区；用户按北京时间写 cron。
-const TIMEZONE = "Asia/Shanghai";
+// 定时任务固定时区；用户按北京时间写 cron。（定时群发与定时执行命令共用）
+export const CRON_TIMEZONE = "Asia/Shanghai";
+
+/**
+ * 用统一约定创建一条 cron 任务：固定东八区、默认不自动启动（由调用方 start）、
+ * 回调内异常统一记日志避免未处理的 Promise 拒绝。cron 表达式非法时在此时抛错。
+ * @param label 日志前缀，用于区分来源（如 "schedule" / "exec_1"）。
+ */
+export function createCronJob(cron: string, onTick: () => void, label: string): CronJob {
+  return CronJob.from({
+    cronTime: cron,
+    onTick,
+    // 由调用方显式启动，便于 index.ts 在装配完成后再开。
+    start: false,
+    timeZone: CRON_TIMEZONE,
+    errorHandler: (error) => logger.error(`[${label}] 定时任务异常: ${(error as Error).message}`),
+  });
+}
 
 /** 定时群发的依赖：由 index.ts 组装注入。 */
 export type ScheduledMessengerDeps = {
@@ -37,15 +53,7 @@ export class ScheduledMessenger {
 
   /** @param deps 依赖；构造后固定不变。cron 表达式非法时抛出。 */
   constructor(private readonly deps: ScheduledMessengerDeps) {
-    this.job = CronJob.from({
-      cronTime: deps.cron,
-      onTick: () => void this.fire(),
-      // 由 start() 显式启动，便于 index.ts 在装配完成后再开。
-      start: false,
-      timeZone: TIMEZONE,
-      // cron 回调内部异常兜底记录，避免未处理的 Promise 拒绝。
-      errorHandler: (error) => logger.error(`[schedule] 定时任务异常: ${(error as Error).message}`),
-    });
+    this.job = createCronJob(deps.cron, () => void this.fire(), "schedule");
   }
 
   /** 启动定时；到点触发 fire()。 */
