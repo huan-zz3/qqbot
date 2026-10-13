@@ -11,8 +11,8 @@ import { logger } from "../logger.js";
 import type { Segment } from "../napcat/types.js";
 import { cleanDescription, dataUrl, downloadImage, type Describe } from "./media.js";
 
-// 识图提示词：一两句话说清图里是什么，图上有文字则带上关键文字。
-const DESCRIBE_PROMPT = "这是聊天里有人发的一张图片。用一两句话说清楚图里是什么；图上有文字就把关键文字写进来。只输出描述。";
+// 识图提示词：详细说清图里是什么，图上有文字则带上文字。
+const DESCRIBE_PROMPT = "这是聊天里有人发的一张图片。详细说清楚图里是什么；图上有文字就把所有文字写进来。只输出客观描述，禁止主观评价。";
 // 内存缓存上限：图片描述只是临时上下文，进程重启即清空，500 条足够覆盖近期图片。
 const MAX_CACHE = 500;
 // 单条描述截断长度，避免超长文本挤占聊天记录。
