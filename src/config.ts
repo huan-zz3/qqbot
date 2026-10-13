@@ -328,8 +328,10 @@ export const config = {
     contextMessages: num("HISTORY_CONTEXT_MESSAGES", 40),
     // 本批每个发言群友各自额外保证纳入的最近消息条数（叠加在共享窗口之上，让刷屏者的内容更完整）。
     userContextMessages: num("HISTORY_USER_CONTEXT_MESSAGES", 20),
-    // 给 decider 看的最近消息条数；与模型窗口分开配置，不做逐发言账号保证。
+    // 给 decider 看的共享最近消息条数（所有人共用）；与模型窗口分开配置。
     deciderContextMessages: num("DECIDER_CONTEXT_MESSAGES", 40),
+    // decider 窗口对本批每个发言群友各自额外保证纳入的最近消息条数；默认 0（与未拆分前一致）。
+    deciderUserContextMessages: num("DECIDER_USER_CONTEXT_MESSAGES", 0),
   },
   // 回复发送方式（分条 / 合并转发）。
   reply: {

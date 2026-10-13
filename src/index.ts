@@ -305,6 +305,7 @@ async function main(): Promise<void> {
   const historyWindows: [string, number][] = [
     ["HISTORY_CONTEXT_MESSAGES", config.history.contextMessages],
     ["DECIDER_CONTEXT_MESSAGES", config.history.deciderContextMessages],
+    ["DECIDER_USER_CONTEXT_MESSAGES", config.history.deciderUserContextMessages],
     ["HISTORY_USER_CONTEXT_MESSAGES", config.history.userContextMessages],
   ];
   const overHistory = historyWindows.filter(([, size]) => size > config.history.maxMessages);

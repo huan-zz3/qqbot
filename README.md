@@ -178,7 +178,8 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `GATE_DIRECT_USERS` | | 名单里的 QQ 被 @ 或被回复时视同机器人自己被 @/回复，同样走 0.45 这个 direct 阈值（防抖也按 direct 处理）；逗号分隔 |
 | `HISTORY_CONTEXT_MESSAGES` | 40 | 给模型看的**共享**最近消息条数（所有人共用） |
 | `HISTORY_USER_CONTEXT_MESSAGES` | 20 | 本批每个发言群友**各自额外保证**纳入的最近消息条数（叠加在共享窗口之上，刷屏者触发的 prompt 更完整携带其内容）；此外，模型窗口还会在「共享窗口 ∪ 逐账号保证」已触及的范围（最旧选中消息→最新）内补齐 **bot 自己**的消息（不新增配置、不改变窗口下界） |
-| `DECIDER_CONTEXT_MESSAGES` | 40 | 给 decider 看的最近消息条数（与模型窗口分开配置，不做逐发言账号保证） |
+| `DECIDER_CONTEXT_MESSAGES` | 40 | 给 decider 看的**共享**最近消息条数（与模型窗口分开配置） |
+| `DECIDER_USER_CONTEXT_MESSAGES` | 0 | decider 窗口对本批每个发言群友**各自额外保证**纳入的最近消息条数（叠加在共享窗口之上，语义同 `HISTORY_USER_CONTEXT_MESSAGES`）；默认 0 时退化为只看共享窗口、与拆分前一致。decider 窗口同样会补齐区间内 **bot 自己**的消息 |
 | `GATE_SEARCH_THRESHOLD` | 0.1 | `needs_search` 高于它就挂上搜索工具 |
 | `GATE_REPLY_QUESTION_PROMPT` | | 追加到 `should_reply` 问题正文之后的自定义提示词 |
 | `GATE_REPLY_TRUE_PROMPT` / `GATE_REPLY_FALSE_PROMPT` | | 分别追加到 `should_reply` 的 true / false 判定标准之后 |

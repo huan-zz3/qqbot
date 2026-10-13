@@ -423,10 +423,15 @@ export class ChatRuntime {
       const now = Date.now();
       // pending 在历史里也有一份，用 Set 区分「本批新消息」与「上文」。
       const pendingSet = new Set(pending);
-      // 本批发言账号（去重）：给其中每个人额外保证其最近若干条消息进入模型窗口。
+      // 本批发言账号（去重）：给其中每个人额外保证其最近若干条消息进入两个窗口。
       const speakers = [...new Set(pending.map((record) => record.userId))];
-      // decider 窗口：共享最近 deciderContextMessages 条 + 本批，不做逐账号保证。
-      const deciderRecords = session.history.recent(config.history.deciderContextMessages + pending.length);
+      // decider 窗口：共享最近 deciderContextMessages 条，叠加每个发言账号各自最近 deciderUserContextMessages 条。
+      const deciderRecords = session.history.context(
+        config.history.deciderContextMessages + pending.length,
+        config.history.deciderUserContextMessages,
+        speakers,
+      );
+      const deciderShared = session.history.recent(config.history.deciderContextMessages + pending.length);
       // 模型窗口：共享最近 contextMessages 条，叠加每个发言账号各自最近 userContextMessages 条。
       const shared = session.history.recent(config.history.contextMessages + pending.length);
       const records = session.history.context(
@@ -434,11 +439,11 @@ export class ChatRuntime {
         config.history.userContextMessages,
         speakers,
       );
-      // 记录两条窗口的实际条数与额外纳入的条数，便于确认拆分与 bot 补齐是否生效。
-      // 共享窗口是模型窗口的子集，故 botFill 恒 >= 0，且恰等于因补齐纳入的 bot 消息条数。
+      // 分别记录两个窗口的实际条数、额外纳入条数与 bot 补齐条数，便于确认拆分与 bot 补齐是否生效。
+      // 各窗口的共享部分是各自窗口的子集，故 extra/botFill 恒 >= 0。
       const countBot = (list: ChatRecord[]) => list.reduce((n, record) => n + (record.fromBot ? 1 : 0), 0);
       logger.debug(
-        `[context] ${session.key} decider=${deciderRecords.length} model=${records.length} shared=${shared.length} speakers=${speakers.length} extra=${records.length - shared.length} botFill=${countBot(records) - countBot(shared)}`,
+        `[context] ${session.key} decider=${deciderRecords.length}(extra=${deciderRecords.length - deciderShared.length},botFill=${countBot(deciderRecords) - countBot(deciderShared)}) model=${records.length}(extra=${records.length - shared.length},botFill=${countBot(records) - countBot(shared)}) shared=${shared.length} speakers=${speakers.length}`,
       );
       // 累计强制回复：本群累计未回复消息达到条数时，本批判定强制回复一次。
       const forceThreshold = config.gate.forceReply.messages;

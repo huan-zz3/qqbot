@@ -1,10 +1,10 @@
 /**
  * context.test.ts —— 上下文窗口拆分（模型窗口 vs decider 窗口）的集成测试。
  *
- * 用很小的窗口（共享/逐账号/decider 各 2 条）驱动真实 ChatRuntime：
+ * 用很小的窗口（共享/逐账号各 2 条）驱动真实 ChatRuntime：
  * 让某发言者较早的消息落在共享窗口之外，验证
  *   - 模型窗口（transcript）因「逐发言账号保证」带上了它；
- *   - decider 窗口（earlier_messages）只看共享条数，不带它。
+ *   - decider 窗口（earlier_messages）同样因逐账号保证带上了它。
  *
  * 注意：config.ts 在 import 时读取 process.env，必须先设置环境变量再动态 import。
  */
@@ -18,10 +18,11 @@ process.env.DEEPSEEK_API_KEY = "test-key";
 process.env.GATE_GROUP_DEBOUNCE_MS = "30";
 process.env.NAPCAT_SEND_INTERVAL_MS = "0";
 process.env.LOG_LEVEL = "silent";
-// 关键：窗口都设为 2，便于用少量消息制造「共享窗口外」的发言人旧消息。
+// 关键：共享窗口都设为 2、逐账号保证设为 2，便于制造「共享窗口外」的发言人旧消息。
 process.env.HISTORY_CONTEXT_MESSAGES = "2";
 process.env.HISTORY_USER_CONTEXT_MESSAGES = "2";
 process.env.DECIDER_CONTEXT_MESSAGES = "2";
+process.env.DECIDER_USER_CONTEXT_MESSAGES = "2";
 
 const { ChatRuntime } = await import("../src/chat/runtime.js");
 type Deps = ConstructorParameters<typeof ChatRuntime>[0];
@@ -46,7 +47,7 @@ function message(userId: number, text: string) {
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("model window includes a speaker's older messages while the decider window does not", async () => {
+test("both windows include a speaker's older messages via per-speaker guarantee", async () => {
   // decider 捕获每个批次的 state；只有含 a3 的那批让模型回复。
   const states: { earlier_messages: { text: string }[]; new_messages: { text: string }[] }[] = [];
   const decider: Deps["decider"] = async (state) => {
@@ -87,7 +88,7 @@ test("model window includes a speaker's older messages while the decider window 
   // 模型窗口（只回复过一次，故只有一条 transcript）：带上了 a2。
   assert.equal(prompts.length, 1);
   assert.match(prompts[0]!, /a2/);
-  // decider 窗口：earlier_messages 只看共享的 2 条（b1、b2），不含 a2。
+  // decider 窗口：earlier_messages 含共享的 2 条（b1、b2），并因逐账号保证带上了 a2。
   const earlier = states[2]!.earlier_messages.map((m) => m.text);
-  assert.deepEqual(earlier, ["b1", "b2"]);
+  assert.deepEqual(earlier, ["a2", "b1", "b2"]);
 });
