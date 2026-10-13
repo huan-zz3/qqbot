@@ -8,8 +8,9 @@
  *
  * 关键约束（都是刻意的最小化，不要随意扩）：
  * - 只读：initialize 不声明任何客户端能力（无 fs、无 terminal、无 elicitation），
- *   并且所有 session/request_permission 一律拒绝（decidePermission），因此 agent 无法
- *   执行命令或改动文件；一旦它请求 fs 能力，说明协议理解有误，直接报错而不是无声返回。
+ *   所有 session/request_permission 一律拒绝（decidePermission），并且每个子进程都注入
+ *   OPENCODE_CONFIG_CONTENT 把写/命令/联网类工具直接 deny（见 opencode/env.ts）——
+ *   三重手段保证 agent 无法执行命令、改动文件或联网外传。
  * - 同步：run() 一直等到任务 stop 才返回，超时则取消并杀掉子进程；不保留常驻进程或会话。
  * - 调度：同一会话（key）串行，跨会话最多 maxConcurrency 个并发（见 opencode/scheduler.ts）；
  *   排队时间不计入本任务超时（三道闸都在真正开始后才启动）。
@@ -95,12 +96,14 @@ export class OpenCodeAgent {
    * @param prompt 交给 OpenCode 的任务或问题。
    * @param directory 要进入的预定义仓库短名（必填）；未知短名会让本次调用抛错。
    * @param key 会话键（群号 / 私聊用户号）；非空，用于按会话串行。
+   * @param additionalDirectories 额外授权的绝对路径目录（如解压出来的压缩包目录）；
+   *   在 session/new 时声明，让 OpenCode 能读工作区之外的这些目录。
    * @returns 任务结束时 OpenCode 的文本答复（可能为空或已截断）；失败时抛出。
    */
-  run(prompt: string, directory: string, key: string): Promise<string> {
+  run(prompt: string, directory: string, key: string, additionalDirectories: string[] = []): Promise<string> {
     // 记下入队时刻，真正开始时用于报告排队等待了多久（不含任务本身耗时）。
     const queuedAt = Date.now();
-    return this.scheduler.run(key, () => this.execute(prompt, directory, key, queuedAt));
+    return this.scheduler.run(key, () => this.execute(prompt, directory, key, additionalDirectories, queuedAt));
   }
 
   /** 杀掉当前存活的所有子进程；进程退出时调用，避免留下孤儿。 */
@@ -122,7 +125,13 @@ export class OpenCodeAgent {
    * 所有异常都向上抛出，并带上子进程 stderr 片段便于定位。
    * 已在调度器拿到全局槽位后才被调用，故此处 startedAt/超时均从真正开始算起（不含排队）。
    */
-  private async execute(prompt: string, directory: string, key: string, queuedAt: number): Promise<string> {
+  private async execute(
+    prompt: string,
+    directory: string,
+    key: string,
+    additionalDirectories: string[],
+    queuedAt: number,
+  ): Promise<string> {
     const { command, args, dirs, timeoutMs, idleTimeoutMs, retryMax, maxOutputChars } = this.options;
     const cwd = resolveDir(dirs, directory);
     const startedAt = Date.now();
@@ -133,7 +142,7 @@ export class OpenCodeAgent {
     // 开始日志带上会话键、排队等待时长与调度器当时的状态（运行/等待数含本次自身）。
     logger.info(
       `[opencode] 开始 会话=${key} 等待=${startedAt - queuedAt}ms 运行=${this.scheduler.active} 排队=${this.scheduler.waiting} ` +
-        `目录=${directory}(${cwd}) prompt=${summarize(finalPrompt)} 前置=${prefix.trim().length} 后置=${suffix.trim().length} 字符`,
+        `目录=${directory}(${cwd}) 附加目录=${additionalDirectories.length} prompt=${summarize(finalPrompt)} 前置=${prefix.trim().length} 后置=${suffix.trim().length} 字符`,
     );
 
     const child = spawn(command, args, { cwd, env: childEnv(), stdio: ["pipe", "pipe", "pipe"] });
@@ -231,7 +240,7 @@ export class OpenCodeAgent {
           );
           logger.debug(`[opencode] initialize 完成 protocol=${init.protocolVersion}`);
 
-          const session = await ctx.buildSession(cwd).start({ cancellationSignal });
+          const session = await ctx.buildSession(cwd).withAdditionalDirectories(additionalDirectories).start({ cancellationSignal });
           logger.info(`[opencode] 会话 ${session.sessionId} 已建立`);
           // 显式指定模型：opencode acp 没有 --model，只能经 session/set_config_option 设置。
           const model = resolveModelValue(session.newSessionResponse.configOptions, this.options.model ?? "");

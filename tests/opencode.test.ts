@@ -7,7 +7,7 @@
  *   绝不选中任何 allow_* 选项（只读约束的核心）；
  * - openCodeTool：工具名/描述暴露正常，必填 prompt+directory（enum 为预定义短名）；
  *   prompt 为空/非字符串、directory 缺失/未知/非字符串时返回参数错误文本且不调用后端；
- *   正常参数去掉首尾空白后连同会话键（key）转交后端并回传其结果。
+ *   正常参数去掉首尾空白后连同会话键与「额外授权目录」转交后端并回传其结果。
  *
  * 说明：真实的 ACP 往返依赖机器上的 opencode 环境，不纳入单测（可单测的只有纯策略与参数校验）。
  * config.ts 在 import 时读取 process.env，故用动态 import。
@@ -59,17 +59,17 @@ test("permission with only allow options is cancelled, never allowed", () => {
   assert.deepEqual(response, { outcome: { outcome: "cancelled" } });
 });
 
-// 假后端：记录收到的 (prompt, directory, key)，返回固定结果，用于观察 openCodeTool 的参数校验与转发。
+// 假后端：记录收到的 (prompt, directory, key, dirs)，返回固定结果，用于观察参数校验与转发。
 const DIR_DEFAULT = { name: "default", path: "/tmp/opencode-repo-default" };
 const DIR_WEB = { name: "web", path: "/tmp/opencode-repo-web" };
 const KEY = "group-500";
 function fakeAgent() {
-  const calls: Array<{ prompt: string; directory: string; key: string }> = [];
+  const calls: Array<{ prompt: string; directory: string; key: string; dirs: string[] }> = [];
   return {
     calls,
     directories: () => [DIR_DEFAULT, DIR_WEB],
-    run: async (prompt: string, directory: string, key: string) => {
-      calls.push({ prompt, directory, key });
+    run: async (prompt: string, directory: string, key: string, dirs: string[] = []) => {
+      calls.push({ prompt, directory, key, dirs });
       return "结果";
     },
   };
@@ -111,54 +111,17 @@ test("opencode tool trims and forwards the prompt, directory and key", async () 
   const agent = fakeAgent();
   const tool = openCodeTool(agent as never, KEY);
   assert.equal(await tool.handler({ prompt: "  看看 README  ", directory: " web " }), "结果");
-  assert.deepEqual(agent.calls, [{ prompt: "看看 README", directory: "web", key: KEY }]);
+  assert.deepEqual(agent.calls, [{ prompt: "看看 README", directory: "web", key: KEY, dirs: [] }]);
 });
 
-// 带文件上下文时：先求值上下文，把内容前置拼在 prompt 之前一并交给后端。
-test("opencode tool prepends the file context when provided", async () => {
+// 传入的额外授权目录随调用透传给后端（opencode 据此声明 additionalDirectories）。
+test("opencode tool forwards the additional directories", async () => {
   const agent = fakeAgent();
-  let calls = 0;
-  const tool = openCodeTool(agent as never, KEY, async () => {
-    calls++;
-    return "  【文件：a.txt】\n内容  ";
-  });
-  assert.equal(await tool.handler({ prompt: "总结一下", directory: "default" }), "结果");
-  assert.equal(calls, 1);
-  assert.deepEqual(agent.calls, [{ prompt: "【文件：a.txt】\n内容\n\n总结一下", directory: "default", key: KEY }]);
-});
-
-// 上下文为空（无相关文件）时行为与不传上下文一致：只转发 prompt。
-test("opencode tool ignores an empty context", async () => {
-  const agent = fakeAgent();
-  const tool = openCodeTool(agent as never, KEY, async () => "   ");
-  assert.equal(await tool.handler({ prompt: "看看代码", directory: "default" }), "结果");
-  assert.deepEqual(agent.calls, [{ prompt: "看看代码", directory: "default", key: KEY }]);
-});
-
-// prompt 为空时不求值上下文、也不调用后端（避免无谓的文件下载）。
-test("opencode tool does not evaluate context for an empty prompt", async () => {
-  const agent = fakeAgent();
-  let calls = 0;
-  const tool = openCodeTool(agent as never, KEY, async () => {
-    calls++;
-    return "内容";
-  });
-  assert.equal(await tool.handler({}), "prompt 不能为空");
-  assert.equal(calls, 0);
-  assert.deepEqual(agent.calls, []);
-});
-
-// directory 不合法时不求值上下文、也不调用后端。
-test("opencode tool does not evaluate context for an unknown directory", async () => {
-  const agent = fakeAgent();
-  let calls = 0;
-  const tool = openCodeTool(agent as never, KEY, async () => {
-    calls++;
-    return "内容";
-  });
-  assert.match(await tool.handler({ prompt: "hi", directory: "nope" }), /directory 必须是以下之一/);
-  assert.equal(calls, 0);
-  assert.deepEqual(agent.calls, []);
+  const tool = openCodeTool(agent as never, KEY, { dirs: ["/tmp/uploads/a", "/tmp/uploads/b"] });
+  assert.equal(await tool.handler({ prompt: "看看日志", directory: "default" }), "结果");
+  assert.deepEqual(agent.calls, [
+    { prompt: "看看日志", directory: "default", key: KEY, dirs: ["/tmp/uploads/a", "/tmp/uploads/b"] },
+  ]);
 });
 
 // onStart 通知：正常调用时恰好触发一次，且早于后端执行。
@@ -166,12 +129,14 @@ test("opencode tool notifies once, before running the backend", async () => {
   const agent = fakeAgent();
   const events: string[] = [];
   const originalRun = agent.run;
-  agent.run = async (prompt: string, directory: string, key: string) => {
+  agent.run = async (prompt: string, directory: string, key: string, dirs: string[] = []) => {
     events.push("run");
-    return originalRun(prompt, directory, key);
+    return originalRun(prompt, directory, key, dirs);
   };
-  const tool = openCodeTool(agent as never, KEY, undefined, () => {
-    events.push("notice");
+  const tool = openCodeTool(agent as never, KEY, {
+    onStart: () => {
+      events.push("notice");
+    },
   });
   assert.equal(await tool.handler({ prompt: "看看代码", directory: "default" }), "结果");
   assert.deepEqual(events, ["notice", "run"]);
@@ -181,34 +146,33 @@ test("opencode tool notifies once, before running the backend", async () => {
 test("opencode tool notifies only once per instance", async () => {
   const agent = fakeAgent();
   let notices = 0;
-  const tool = openCodeTool(agent as never, KEY, undefined, () => {
-    notices++;
+  const tool = openCodeTool(agent as never, KEY, {
+    onStart: () => {
+      notices++;
+    },
   });
   await tool.handler({ prompt: "a", directory: "default" });
   await tool.handler({ prompt: "b", directory: "web" });
   assert.equal(notices, 1);
-  assert.deepEqual(agent.calls, [
-    { prompt: "a", directory: "default", key: KEY },
-    { prompt: "b", directory: "web", key: KEY },
-  ]);
+  assert.deepEqual(
+    agent.calls.map((call) => ({ prompt: call.prompt, directory: call.directory })),
+    [
+      { prompt: "a", directory: "default" },
+      { prompt: "b", directory: "web" },
+    ],
+  );
 });
 
 // prompt 为空时不触发通知、也不调用后端。
 test("opencode tool does not notify for an empty prompt", async () => {
   const agent = fakeAgent();
   let notices = 0;
-  const tool = openCodeTool(agent as never, KEY, undefined, () => {
-    notices++;
+  const tool = openCodeTool(agent as never, KEY, {
+    onStart: () => {
+      notices++;
+    },
   });
   assert.equal(await tool.handler({}), "prompt 不能为空");
   assert.equal(notices, 0);
   assert.deepEqual(agent.calls, []);
-});
-
-// 不传 onStart 时行为与原来一致（回归）。
-test("opencode tool runs without an onStart callback", async () => {
-  const agent = fakeAgent();
-  const tool = openCodeTool(agent as never, KEY);
-  assert.equal(await tool.handler({ prompt: "hi", directory: "default" }), "结果");
-  assert.deepEqual(agent.calls, [{ prompt: "hi", directory: "default", key: KEY }]);
 });

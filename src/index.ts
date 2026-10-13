@@ -10,8 +10,11 @@
  */
 import { config } from "./config.js";
 import { ChatRuntime } from "./chat/runtime.js";
+import { extractRar } from "./chat/extract-rar.js";
+import { extractZip } from "./chat/extract-zip.js";
 import { FileStore, type CallAction } from "./chat/files.js";
 import { ImageDescriber, describeImageWith } from "./chat/images.js";
+import { Materials } from "./chat/materials.js";
 import { MemoryStore } from "./chat/memory.js";
 import { PowerSwitch } from "./chat/power.js";
 import { StickerStore, describeSticker } from "./chat/stickers.js";
@@ -109,6 +112,30 @@ async function main(): Promise<void> {
     });
   }
 
+  // 压缩包物料化：启用且配了物料化时，各上限必须为正、目录非空，否则启动即报错退出（不静默失效）。
+  if (config.files.enabled && config.files.materialize) {
+    if (!config.files.dir) {
+      logger.error("FILES_MATERIALIZE=true 但 FILES_DIR 为空");
+      process.exit(1);
+    }
+    const settings: [string, number][] = [
+      ["FILES_MAX_BYTES", config.files.maxBytes],
+      ["FILES_MAX_FILES", config.files.maxFiles],
+      ["FILES_EXTRACT_MAX_BYTES", config.files.extractMaxBytes],
+      ["FILES_EXTRACT_MAX_ENTRIES", config.files.extractMaxEntries],
+      ["FILES_EXTRACT_MAX_FILE_BYTES", config.files.extractMaxFileBytes],
+      ["FILES_KEEP_MS", config.files.keepMs],
+      ["FILES_STORE_MAX_BYTES", config.files.storeMaxBytes],
+      ["FILES_SWEEP_MS", config.files.sweepMs],
+      ["FILES_TIMEOUT_MS", config.files.timeoutMs],
+    ];
+    const invalid = settings.filter(([, value]) => !(value > 0));
+    if (invalid.length > 0) {
+      logger.error(`FILES_MATERIALIZE=true 但以下配置必须为正数：${invalid.map(([name]) => name).join("、")}`);
+      process.exit(1);
+    }
+  }
+
   // 表情包库：从磁盘加载已收藏的表情与描述（写描述用 deepseek 识图）。
   let stickers: StickerStore | undefined;
   if (config.stickers.enabled) {
@@ -148,12 +175,32 @@ async function main(): Promise<void> {
     }
     if (isGroupIncreaseEvent(event)) welcome?.handle(event);
   });
-  // 聊天文件读取：注入 callAction（需绑定 this）与上限；FILES_ENABLED 关闭时为 undefined，完全保持原有行为。
+  // 压缩包物料化：下载后端（FileStore）与解压驱动；FILES_ENABLED / FILES_MATERIALIZE 都开才创建。
+  // 与 OPENCODE_ENABLED 解耦：即使没开 opencode，也按物料化开关独立决定是否下载解压。
   const callAction: CallAction = (action, params) => client.callAction(action, params);
-  const files = config.files.enabled
-    ? new FileStore(callAction, config.files.maxBytes, config.files.maxChars)
+  const downloader = config.files.enabled
+    ? new FileStore(callAction, config.files.maxBytes, config.files.timeoutMs)
     : undefined;
-  runtime = new ChatRuntime({ client, decider, search, opencode, stickers, images, files, memory, power, handoff });
+  const materials =
+    downloader && config.files.materialize
+      ? new Materials(
+          {
+            dir: config.files.dir,
+            maxBytes: config.files.maxBytes,
+            limits: {
+              maxBytes: config.files.extractMaxBytes,
+              maxEntries: config.files.extractMaxEntries,
+              maxFileBytes: config.files.extractMaxFileBytes,
+            },
+            keepMs: config.files.keepMs,
+            storeMaxBytes: config.files.storeMaxBytes,
+            sweepMs: config.files.sweepMs,
+          },
+          { download: (ref) => downloader.download(ref), drivers: { zip: extractZip, rar: extractRar } },
+        )
+      : undefined;
+  materials?.start();
+  runtime = new ChatRuntime({ client, decider, search, opencode, stickers, images, materials, memory, power, handoff });
   // 群管理依赖 decider；启用了却没有 decider 时明确告警，而不是静默失效。
   if (config.moderation.enabled) {
     if (decider) moderation = new Moderation({ client, decider, power, handoff });
@@ -286,7 +333,7 @@ async function main(): Promise<void> {
   const opencodeInput =
     [config.opencode.inputPrefix && "pre", config.opencode.inputSuffix && "suf"].filter(Boolean).join("+") || "off";
   logger.info(
-    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${config.files.enabled ? "on" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${materials ? `on(${config.files.dir},keep=${Math.round(config.files.keepMs / 3600000)}h)` : config.files.enabled ? "off(materialize)" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();
@@ -295,6 +342,7 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     logger.info("退出中…");
     opencode?.dispose();
+    materials?.dispose();
     schedule?.dispose();
     cronExec?.dispose();
     await search?.dispose().catch(() => undefined);

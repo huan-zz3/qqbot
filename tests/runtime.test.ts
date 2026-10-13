@@ -491,35 +491,33 @@ test("a batch waits for a slow moderation decision before replying", async () =>
   assert.equal(sent.length, 0);
 });
 
-// 模型调用 opencode 且本批发言人带有文本文件时，把文件内容作为上下文前置注入 opencode 的 prompt。
-test("a text file from the current speaker is injected into the opencode call", async () => {
+// 本批发言人的压缩包被物料化：解压清单进入回复提示词，解压目录随 opencode 调用传给后端。
+test("an archive from the current speaker is materialized and its manifest and dirs reach the model", async () => {
   const { runtime } = setup(async () => ({ should_reply: 0.9, addressed: 0.9 }), ["看完了"]);
-  // 假文件存储：记录被读取的 ref，返回文本内容。
-  const readRefs: { name: string }[] = [];
-  (runtime as unknown as { deps: { files: unknown } }).deps.files = {
-    read: async (ref: { name: string }) => {
-      readRefs.push(ref);
-      return { status: "text", content: "文件正文", truncated: false };
+  // 假物料化：记录请求，返回固定清单与目录。
+  const requests: { name: string; userId: number }[] = [];
+  const systems: string[] = [];
+  (runtime as unknown as { deps: { materials: unknown } }).deps.materials = {
+    materialize: async (reqs: { ref: { name: string }; userId: number }[]) => {
+      for (const req of reqs) requests.push({ name: req.ref.name, userId: req.userId });
+      return { text: "【清单】已解压到 /tmp/upl/logs", dirs: ["/tmp/upl/logs"] };
     },
   };
-  // 假 opencode：记录收到的 prompt（应含文件内容）。
-  const agentPrompts: string[] = [];
+  // 假 opencode：记录收到的额外授权目录。
+  const agentDirs: string[][] = [];
   (runtime as unknown as { deps: { opencode: unknown } }).deps.opencode = {
     directories: () => [{ name: "default", path: "/tmp/repo" }],
-    run: async (prompt: string) => {
-      agentPrompts.push(prompt);
+    run: async (_prompt: string, _directory: string, _key: string, dirs: string[] = []) => {
+      agentDirs.push(dirs);
       return "看完了";
     },
   };
-  // 第一轮返回 opencode 工具调用，第二轮收尾；模型最终输出 "看完了"。
-  // 自定义 fetch 同时记录首轮 user 消息（聊天记录），替代 setup 的记录器。
-  const transcripts: string[] = [];
   let round = 0;
   globalThis.fetch = (async (_url: string, init: RequestInit) => {
     round++;
     const body = JSON.parse(String(init.body));
+    if (round === 1) systems.push(body.messages[0].content);
     if (round === 1) {
-      transcripts.push(body.messages.at(-1).content);
       return new Response(
         JSON.stringify({
           choices: [
@@ -527,7 +525,7 @@ test("a text file from the current speaker is injected into the opencode call", 
               message: {
                 content: null,
                 tool_calls: [
-                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "查看文件", directory: "default" }) } },
+                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "看看日志", directory: "default" }) } },
                 ],
               },
             },
@@ -540,108 +538,46 @@ test("a text file from the current speaker is injected into the opencode call", 
   }) as typeof fetch;
 
   runtime.handle(
-    groupMessage("帮我看看这个文件", [{ type: "file", data: { file: "报告.txt", file_id: "f1", file_size: 1024 } }]),
+    groupMessage("帮我看看这个包", [{ type: "file", data: { file: "logs.zip", file_id: "z1", file_size: 1024 } }]),
   );
   await wait(400);
 
-  // 聊天记录里文件渲染为 [文件：名（大小）]，模型据此知道有可引用的文件。
-  assert.match(transcripts[0]!, /\[文件：报告\.txt（1\.0KB）\]/);
-  assert.deepEqual(readRefs.map((ref) => ref.name), ["报告.txt"]);
-  assert.match(agentPrompts[0]!, /文件正文/);
-  assert.match(agentPrompts[0]!, /查看文件/);
+  assert.deepEqual(requests, [{ name: "logs.zip", userId: 7 }]);
+  assert.match(systems[0]!, /【清单】已解压到 \/tmp\/upl\/logs/);
+  assert.deepEqual(agentDirs, [["/tmp/upl/logs"]]);
 });
 
-// 非文本文件：opencode 上下文里说明无法读取（带上原因），而不是静默省略。
-test("an unsupported file is reported in the opencode context", async () => {
-  const { runtime } = setup(async () => ({ should_reply: 0.9, addressed: 0.9 }), ["看完了"]);
-  (runtime as unknown as { deps: { files: unknown } }).deps.files = {
-    read: async () => ({ status: "unsupported", reason: "只支持文本类文件" }),
+// 物料化失败：失败原因进入提示词（不静默省略）。
+test("a materialization failure is reported in the reply prompt", async () => {
+  const { runtime, systems } = setup(async () => ({ should_reply: 0.9, addressed: 0.9 }), ["看完了"]);
+  (runtime as unknown as { deps: { materials: unknown } }).deps.materials = {
+    materialize: async () => ({ text: "- logs.zip：读取失败（下载失败 HTTP 404）", dirs: [] }),
   };
-  const agentPrompts: string[] = [];
-  (runtime as unknown as { deps: { opencode: unknown } }).deps.opencode = {
-    directories: () => [{ name: "default", path: "/tmp/repo" }],
-    run: async (prompt: string) => {
-      agentPrompts.push(prompt);
-      return "看完了";
-    },
-  };
-  let round = 0;
-  globalThis.fetch = (async () => {
-    round++;
-    if (round === 1) {
-      return new Response(
-        JSON.stringify({
-          choices: [
-            {
-              message: {
-                content: null,
-                tool_calls: [
-                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "看看", directory: "default" }) } },
-                ],
-              },
-            },
-          ],
-        }),
-        { status: 200 },
-      );
-    }
-    return new Response(JSON.stringify({ choices: [{ message: { content: "看完了" } }] }), { status: 200 });
-  }) as typeof fetch;
-
-  runtime.handle(groupMessage("看看这个包", [{ type: "file", data: { file: "archive.zip", file_id: "z1", file_size: 10 } }]));
-  await wait(400);
-  assert.match(agentPrompts[0]!, /无法读取：只支持文本类文件/);
-});
-
-// 只有本批发言人的文件会被注入：上一批别人发的文件不进本次 opencode 上下文。
-test("files from other senders are not injected", async () => {
-  let judged = 0;
-  const { runtime } = setup(async () => {
-    judged++;
-    return { should_reply: judged === 1 ? 0.1 : 0.9, addressed: 0.9 };
-  }, ["看完了"]);
-  (runtime as unknown as { deps: { files: unknown } }).deps.files = {
-    read: async () => ({ status: "text", content: "机密内容", truncated: false }),
-  };
-  const agentPrompts: string[] = [];
-  (runtime as unknown as { deps: { opencode: unknown } }).deps.opencode = {
-    directories: () => [{ name: "default", path: "/tmp/repo" }],
-    run: async (prompt: string) => {
-      agentPrompts.push(prompt);
-      return "看完了";
-    },
-  };
-  let round = 0;
-  globalThis.fetch = (async () => {
-    round++;
-    if (round === 1) {
-      return new Response(
-        JSON.stringify({
-          choices: [
-            {
-              message: {
-                content: null,
-                tool_calls: [
-                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "看看", directory: "default" }) } },
-                ],
-              },
-            },
-          ],
-        }),
-        { status: 200 },
-      );
-    }
-    return new Response(JSON.stringify({ choices: [{ message: { content: "看完了" } }] }), { status: 200 });
-  }) as typeof fetch;
-
-  // 第一批：用户 8 只发文件，decider 说不回复（不触发 opencode）。
-  runtime.handle(groupMessage("", [{ type: "file", data: { file: "机密.txt", file_id: "s1", file_size: 10 } }], 500, 8));
+  runtime.handle(
+    groupMessage("看看这个包", [{ type: "file", data: { file: "logs.zip", file_id: "z2", file_size: 10 } }]),
+  );
   await wait(200);
-  // 第二批：用户 7 提问，opencode 上下文里不应包含 8 的文件内容。
-  runtime.handle(groupMessage("看看代码", [{ type: "at", data: { qq: String(SELF) } }], 500, 7));
-  await wait(300);
-  assert.equal(agentPrompts.length, 1);
-  assert.doesNotMatch(agentPrompts[0]!, /机密内容/);
+  assert.match(systems[0]!, /读取失败（下载失败 HTTP 404）/);
+  // 即使本批没挂 opencode 工具，也要让模型知道 [文件：…] 是压缩包、失败要转告。
+  assert.match(systems[0]!, /是群友发来的压缩包/);
+});
+
+// 非压缩包（松散文本文件）不再触发物料化，也不进提示词。
+test("non-archive files do not trigger materialization", async () => {
+  const { runtime, systems } = setup(async () => ({ should_reply: 0.9, addressed: 0.9 }), ["看完了"]);
+  let calls = 0;
+  (runtime as unknown as { deps: { materials: unknown } }).deps.materials = {
+    materialize: async () => {
+      calls++;
+      return { text: "不该出现", dirs: [] };
+    },
+  };
+  runtime.handle(
+    groupMessage("看看这个", [{ type: "file", data: { file: "报告.txt", file_id: "t1", file_size: 10 } }]),
+  );
+  await wait(200);
+  assert.equal(calls, 0);
+  assert.doesNotMatch(systems[0]!, /不该出现/);
 });
 
 // 累计强制回复：群 501 累计 3 条未回复消息后，即使 decider 一直说不回，第三批也强制回复一次；

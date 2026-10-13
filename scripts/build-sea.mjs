@@ -11,8 +11,13 @@
  */
 import { chmodSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { build } from "esbuild";
 import { inject } from "postject";
+
+const require = createRequire(import.meta.url);
+// node-unrar-js 的 WASM 主体：SEA 下无法按文件路径加载，必须作为资产嵌入，运行时用 node:sea 读取。
+const UNRAR_WASM = require.resolve("node-unrar-js/dist/js/unrar.wasm");
 
 const BUNDLE = "dist/qqbot.cjs";
 const BLOB = "dist/qqbot.blob";
@@ -35,7 +40,13 @@ await build({
 });
 
 // 2. 生成 SEA blob。
-const seaConfig = { main: BUNDLE, output: BLOB, disableExperimentalSEAWarning: true };
+const seaConfig = {
+  main: BUNDLE,
+  output: BLOB,
+  disableExperimentalSEAWarning: true,
+  // 嵌入 rar 解压所需的 WASM（运行时经 node:sea 的 getRawAsset("unrar.wasm") 取回）。
+  assets: { "unrar.wasm": UNRAR_WASM },
+};
 writeFileSync(CONFIG, JSON.stringify(seaConfig));
 const sea = spawnSync(process.execPath, ["--experimental-sea-config", CONFIG], { stdio: "inherit" });
 if (sea.status !== 0) throw new Error("生成 SEA blob 失败");

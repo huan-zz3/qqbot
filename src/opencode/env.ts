@@ -17,7 +17,25 @@ import { config } from "../config.js";
 const LOCAL_HOSTS = ["127.0.0.1", "localhost", "::1"];
 
 /**
- * 基于当前环境构造子进程环境：合并 no_proxy 覆盖本机地址，并在配了代理时显式注入代理变量。
+ * 只读加固：每个 opencode 子进程都注入这段配置，把「写/命令/联网」类工具直接摘掉。
+ * 实测（探针 F）：deny 生效时不弹权限询问，直接不挂对应工具，且不影响模型/provider 解析。
+ * 这是把不可信压缩包内容交给 opencode 分析的前提；`execute`（Code Mode，能跑 JS + fetch，
+ * 是外传通道）也必须 deny。
+ */
+const READONLY_CONFIG = JSON.stringify({
+  permissions: [
+    { action: "edit", resource: "*", effect: "deny" },
+    { action: "shell", resource: "*", effect: "deny" },
+    { action: "execute", resource: "*", effect: "deny" },
+    { action: "webfetch", resource: "*", effect: "deny" },
+    { action: "websearch", resource: "*", effect: "deny" },
+    { action: "subagent", resource: "*", effect: "deny" },
+  ],
+});
+
+/**
+ * 基于当前环境构造子进程环境：合并 no_proxy 覆盖本机地址，并在配了代理时显式注入代理变量；
+ * 同时注入只读加固配置（覆盖用户已有的 OPENCODE_CONFIG_CONTENT，只读是硬要求）。
  *
  * @param proxyUrl 代理地址；默认取 config.proxy.url，留空则维持直连（仍会排除本机）。
  * @returns 供 spawn 使用的环境变量对象。
@@ -35,5 +53,7 @@ export function childEnv(proxyUrl: string = config.proxy.url): NodeJS.ProcessEnv
     env.https_proxy = env.HTTPS_PROXY = proxy;
     env.all_proxy = env.ALL_PROXY = proxy;
   }
+  // 只读加固：覆盖式注入，确保 opencode 子进程拿不到写/命令/联网类工具。
+  env.OPENCODE_CONFIG_CONTENT = READONLY_CONFIG;
   return env;
 }

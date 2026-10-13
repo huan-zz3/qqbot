@@ -101,6 +101,13 @@ const personaRules = textFile(personaFile, "BOT_PERSONA_FILE");
 const DEFAULT_OPENCODE_PROMPT =
   "你可以用 opencode 工具在某个代码仓库里检索、阅读代码并回答相关问题；它只能读，不能修改任何文件。";
 
+// FILES_PROMPT 未配置时给模型的压缩包处理说明；执行逻辑可用 .env 覆盖。
+const DEFAULT_FILES_PROMPT =
+  "聊天记录里的 [文件：…] 是群友发来的压缩包。系统会尝试在本地解压它：成功时清单会给出目录与文件；无法解压或读取失败时，清单里会写明原因，请把原因如实告诉发文件的群友。图片、音视频、Office 文档等其他类型无法读取，可让对方打包成 zip 或 rar 再发。";
+
+// FILES_READ_PROMPT 未配置时，给模型「怎么读解压目录」的说明（仅在挂了 opencode 工具时追加）。
+const DEFAULT_FILES_READ_PROMPT = "需要查看压缩包里的内容时，可调用 opencode 读取清单里给出的解压目录。";
+
 // OPENCODE_ARGS 未配置时，默认以 `acp` 子命令启动（JSON-RPC over stdio 的 agent）。
 const opencodeArgs = list("OPENCODE_ARGS");
 
@@ -263,16 +270,38 @@ export const config = {
     // 随提示词给模型的候选表情数量（打乱顺序，避免越用越偏向某几张）。
     promptLimit: num("STICKERS_PROMPT_LIMIT", 40),
   },
-  // 聊天里发来的文件：文本类文件可随 opencode 调用一并交给模型分析。
-  // 只处理聊天中收到的文件；不做群文件列表，也不支持非文本（图片/压缩包/音视频/Office 等）。
+  // 聊天里发来的压缩包：收到后下载解压到本地目录，把「目录 + 文件清单」交给回复模型
+  // （模型可让 opencode 去读）。只认 .zip/.rar；松散文本文件不再支持，请群友自行打包。
+  // 物料化与 OPENCODE_ENABLED 解耦：由 FILES_MATERIALIZE 单独控制。
+  // 启用且配了物料化时，各上限必须为正，否则启动即报错退出（见 index.ts）。
   files: {
     enabled: bool("FILES_ENABLED", true),
-    // 单个文件下载上限（字节），超出即判失败，不截断二进制。
-    maxBytes: num("FILES_MAX_BYTES", 5 * 1024 * 1024),
-    // 单个文件注入 opencode 的字符上限，超出截断（截断事实会写进上下文与日志）。
-    maxChars: num("FILES_MAX_CHARS", 20000),
-    // 单次 opencode 调用最多注入的文件数（按新→旧选取）。
+    // 是否在回复批构建时下载解压压缩包（独立于 opencode 是否启用）。
+    materialize: bool("FILES_MATERIALIZE", true),
+    // 解压根目录（data/ 已被 .gitignore 忽略）。
+    dir: str("FILES_DIR", "data/uploads"),
+    // 单个压缩包下载上限（字节），流式边读边限。
+    maxBytes: num("FILES_MAX_BYTES", 50 * 1024 * 1024),
+    // 单批最多处理（下载解压）几个压缩包（按新→旧选取）。
     maxFiles: num("FILES_MAX_FILES", 3),
+    // 单包解压后总字节上限。
+    extractMaxBytes: num("FILES_EXTRACT_MAX_BYTES", 200 * 1024 * 1024),
+    // 单包条目数上限（含目录）。
+    extractMaxEntries: num("FILES_EXTRACT_MAX_ENTRIES", 1000),
+    // 单个文件解压后字节上限。
+    extractMaxFileBytes: num("FILES_EXTRACT_MAX_FILE_BYTES", 50 * 1024 * 1024),
+    // 解压目录保留时长（毫秒）。
+    keepMs: num("FILES_KEEP_MS", 24 * 60 * 60 * 1000),
+    // 解压目录磁盘总预算（字节），超出按最旧优先清理。
+    storeMaxBytes: num("FILES_STORE_MAX_BYTES", 1024 * 1024 * 1024),
+    // 清理扫描间隔（毫秒）。
+    sweepMs: num("FILES_SWEEP_MS", 60 * 60 * 1000),
+    // 单个压缩包下载超时（毫秒）。
+    timeoutMs: num("FILES_TIMEOUT_MS", 120000),
+    // 给模型的压缩包处理说明（何时算成功/失败、失败要如实转告等执行逻辑）；留空用内置默认。
+    prompt: str("FILES_PROMPT", DEFAULT_FILES_PROMPT),
+    // 仅在挂了 opencode 工具时追加的「怎么读解压目录」说明；留空用内置默认。
+    readPrompt: str("FILES_READ_PROMPT", DEFAULT_FILES_READ_PROMPT),
   },
   // 普通图片识图（不保存图片，只缓存描述）。
   images: {

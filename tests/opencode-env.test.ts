@@ -58,3 +58,16 @@ test("childEnv adds no proxy variables when the proxy url is empty", () => {
   assert.ok(hosts.includes("localhost"));
   assert.ok(hosts.includes("::1"));
 });
+
+// 只读加固：无论代理如何，都注入 OPENCODE_CONFIG_CONTENT 且把写/命令/联网类工具 deny。
+test("childEnv always injects the read-only OPENCODE_CONFIG_CONTENT deny policy", () => {
+  const env = childEnv("http://127.0.0.1:7890");
+  const parsed = JSON.parse(String(env.OPENCODE_CONFIG_CONTENT)) as {
+    permissions: Array<{ action: string; effect: string }>;
+  };
+  const denied = parsed.permissions.filter((item) => item.effect === "deny").map((item) => item.action);
+  for (const action of ["edit", "shell", "execute", "webfetch", "websearch", "subagent"]) {
+    assert.ok(denied.includes(action), `${action} should be denied`);
+  }
+});
+
