@@ -50,7 +50,7 @@
 - `src/napcat/` WS 客户端、OneBot 类型、消息段渲染、QQ 表情表。
 - `src/chat/gate.ts` decider 问题与阈值、无 decider 兜底、`ctx.force` 强制回复；`runtime.ts` 会话防抖/判断/回复/发送/触发记忆、`sinceBot` 累计计数。
 - `src/decider/questions.ts` 通用判定输入/问题类型与 noul 构造；`client.ts` 通用判定请求（POST state + questions，端点/密钥/模型来自 `config.decider`）。
-- `src/chat/reply.ts` 提示词、输出解析、分条或合并转发；`stickers.ts`/`images.ts`/`media.ts` 表情包与图片。
+- `src/chat/reply.ts` 提示词、输出解析、分条或合并转发（超阈值时第一条文本单独发、从第二条起才合并，表情包始终排在转发之后）；`stickers.ts`/`images.ts`/`media.ts` 表情包与图片。
 - `src/chat/files.ts` 下载后端（解析地址 + 流式取字节，超过 `FILES_MAX_BYTES` 即中止）；`archive.ts` 压缩包纯逻辑（类型判定/条目名净化/限额/目录命名/清单/清理挑选）；`materials.ts` 物料化编排（下载→解压→文本转码→原子落盘→按目录缓存→清理）；`extract-zip.ts`（yauzl）/`extract-rar.ts`（node-unrar-js）解压驱动；`decode.ts` 文本字节多编码严格解码（BOM 优先，UTF-8→GB18030→Big5→Shift_JIS→EUC-KR，首个成功；**GB18030 会吞掉多数 Big5/SJIS/EUC-KR 字节**，命中编码记日志以便排查）。
 - `src/chat/memory.ts` 长期记忆（群/私聊分开，按 QQ 号）；`power.ts` 管理员 `/启动` `/停止`（持久化）；`history.ts` 会话消息记录。
 - `src/llm/deepseek.ts` deepseek-flash 工具循环（含工具额度用尽时的收尾指令）、识图、JSON（失败重试一次）。

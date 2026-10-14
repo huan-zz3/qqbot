@@ -8,8 +8,8 @@
  * - 回复里写的 @名字 由发送层变成真 @（runtime.ts -> napcat/message.js textToSegments）。
  *
  * 发送规划（planSends）：短回复逐段（逐行）发；行数超过 forwardParts（默认 5）或总字数超过
- * forwardChars（默认 300）时，正文打包成一条合并转发，只留一条短开场白（≤ LEAD_MAX_CHARS）
- * 和表情包作为普通消息。
+ * forwardChars（默认 300）时，第一条文本一律单独发普通消息，从第二条起合并成一条转发；
+ * 只有一条文本时不产生转发（该行直接发普通消息）。表情包始终作为普通消息排在转发之后。
  *
  * 关键约束：提示词只交代事实（聊天记录格式、可用表情包、是否挂了搜索），不写长度/语气规则、
  * 不给示例句——模型会照抄示例。模型复读自己最近结尾的问题由 dropRepeatedEndings 处理。
@@ -45,9 +45,6 @@ export type ReplyPart = { kind: "text"; text: string } | { kind: "sticker"; id: 
 
 /** planSends 算出的发送计划：单个片段，或一整段合并转发。 */
 export type Outgoing = { kind: "part"; part: ReplyPart } | { kind: "forward"; text: string };
-
-// 合并转发时，首行短于这个长度才会被留在外面作为独立开场白。
-const LEAD_MAX_CHARS = 30;
 
 // 匹配模型写的 [表情包#编号]。
 const STICKER_MARKER = /\[表情包#(\d+)\]/g;
@@ -201,7 +198,8 @@ export function dropRepeatedEndings(parts: ReplyPart[], recentBotTexts: string[]
 
 /**
  * 规划发送方式：短回复逐段（逐行）发出；长回复（行数 > forwardParts 或字数 > forwardChars）
- * 打包成一条合并转发，只把短开场白（≤ LEAD_MAX_CHARS，且不止一行时）和表情包留在外面作为普通消息。
+ * 第一条文本一律单独发普通消息，从第二条起合并成一条转发；只有一条文本时该行直接发普通消息。
+ * 表情包始终作为普通消息排在转发之后。
  */
 export function planSends(parts: ReplyPart[]): Outgoing[] {
   const texts = parts.filter((part): part is Extract<ReplyPart, { kind: "text" }> => part.kind === "text");
@@ -210,13 +208,11 @@ export function planSends(parts: ReplyPart[]): Outgoing[] {
     return parts.map((part) => ({ kind: "part", part }));
   }
   const plan: Outgoing[] = [];
-  let body = texts;
-  // 首行是短开场白时留在转发外面，作为一条普通消息先发。
-  if (texts.length > 1 && texts[0]!.text.length <= LEAD_MAX_CHARS) {
-    plan.push({ kind: "part", part: texts[0]! });
-    body = texts.slice(1);
-  }
-  plan.push({ kind: "forward", text: body.map((part) => part.text).join("\n") });
+  // 进入合并分支时 texts 必非空（空文本必然走上面的短路径），首条文本无条件单独发出。
+  plan.push({ kind: "part", part: texts[0]! });
+  const body = texts.slice(1);
+  // 从第二条起才合并；只有一条文本时没有可合并的内容，不再产生转发项。
+  if (body.length > 0) plan.push({ kind: "forward", text: body.map((part) => part.text).join("\n") });
   for (const part of parts) if (part.kind === "sticker") plan.push({ kind: "part", part });
   return plan;
 }

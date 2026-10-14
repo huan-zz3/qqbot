@@ -6,7 +6,7 @@
  *   [表情包#编号] 标记解析；
  * - buildSystemPrompt / buildTranscript：提示词只列事实（表情包、记忆、搜索能力），
  *   聊天记录格式（时间、★ 待回应、bot 自称「你」）；
- * - planSends：短回复逐条发、长回复合并转发、开头短句与表情包保留为普通消息；
+ * - planSends：短回复逐条发、长回复首条单发其余合并转发、表情包保留为普通消息；
  * - dropRepeatedEndings：近期用过两次的结尾 emoji/表情会被去掉。
  *
  * 注意：config.ts 在 import 时读取 process.env，上限配置必须在动态 import 前设置。
@@ -136,9 +136,10 @@ test("transcript stars pending messages and labels the bot", () => {
 
 // 发送规划（REPLY_FORWARD_PARTS=2 / REPLY_FORWARD_CHARS=30）：
 // - 短内容（≤2 段且 ≤30 字）逐段直接发送；
-// - 超限时长段正文合并成一条转发，但开头短句（≤30 字）和表情包仍作为普通消息单独发；
-// - 单段就超长时整段（含尾巴）一起进转发。
-test("short replies go line by line; long ones become one merged forward", () => {
+// - 超限时首条文本一律单独发普通消息，从第二条起合并成一条转发；
+// - 表情包仍作为普通消息单独发，排在转发之后；
+// - 只有一条文本却超限时，该行直接单发，不产生转发。
+test("short replies go line by line; long ones send the first line then merge the rest", () => {
   const t = (value: string) => ({ kind: "text" as const, text: value });
   const sticker = { kind: "sticker" as const, id: 3 };
   assert.deepEqual(planSends([t("在的"), sticker]), [
@@ -151,7 +152,13 @@ test("short replies go line by line; long ones become one merged forward", () =>
     { kind: "part", part: sticker },
   ]);
   const long = "很长".repeat(20);
-  assert.deepEqual(planSends([t(long), t("尾巴")]), [{ kind: "forward", text: `${long}\n尾巴` }]);
+  // 首行不论长短都单独发，其余进转发。
+  assert.deepEqual(planSends([t(long), t("尾巴")]), [
+    { kind: "part", part: t(long) },
+    { kind: "forward", text: "尾巴" },
+  ]);
+  // 只有一条文本却超限：直接单发，不产生转发。
+  assert.deepEqual(planSends([t(long)]), [{ kind: "part", part: t(long) }]);
 });
 
 // 结尾去重：同一结尾 emoji/QQ 表情在最近 5 条里已用过两次才去掉，只用过一次保留；

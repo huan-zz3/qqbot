@@ -330,7 +330,7 @@ test("search tools are offered when decider scores it above 0.1 and the MCP serv
   assert.equal(tools[2], undefined);
 });
 
-// 长回复（REPLY_FORWARD_PARTS=3）：首行短正文照常单发，其余打包成一条合并转发（node 用 bot 昵称）；
+// 长回复（REPLY_FORWARD_PARTS=3）：首行单独发普通消息，其余合并成一条转发（node 用 bot 昵称）；
 // 当转发失败时降级为逐行普通消息，保证内容仍送达；等待时间覆盖分条发送的打字间隔。
 test("long replies are sent as one merged forward, with a plain fallback", async () => {
   const at = { type: "at", data: { qq: String(SELF) } };
@@ -351,6 +351,20 @@ test("long replies are sent as one merged forward, with a plain fallback", async
   await wait(9000);
   forwardFails = false;
   assert.equal(sent.length, 1 + 1 + 4);
+});
+
+// 首行本身很长时也照样单独发：确认第一行是否外置不再取决于其长度。
+test("a long first line is still sent separately from the merged forward", async () => {
+  const at = { type: "at", data: { qq: String(SELF) } };
+  const head = "很长".repeat(20);
+  const reply = `${head}\n第一点\n第二点\n第三点`;
+  const { runtime, sent, forwards } = setup(async () => ({ should_reply: 0.9, addressed: 0.9 }), [reply]);
+  runtime.handle(groupMessage("详细说说", [at]));
+  await wait(2500);
+  assert.equal(forwards.length, 1);
+  assert.deepEqual(sent.map((item) => item.message), [[{ type: "text", data: { text: head } }]]);
+  const node = (forwards[0]!.nodes as { type: string; data: { content: unknown } }[])[0]!;
+  assert.deepEqual(node.data.content, [{ type: "text", data: { text: "第一点\n第二点\n第三点" } }]);
 });
 
 // 普通图片同样先识图：decider 看到的文本是 [图片：手机设置页面的截图] 加原文。
