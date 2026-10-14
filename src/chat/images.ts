@@ -15,8 +15,6 @@ import { cleanDescription, dataUrl, downloadImage, type Describe } from "./media
 const DESCRIBE_PROMPT = "<image>\nDescribe this image in detail. If there are any words on the picture, write them all in. Only objective descriptions are output. Subjective evaluations are prohibited.";
 // 内存缓存上限：图片描述只是临时上下文，进程重启即清空，500 条足够覆盖近期图片。
 const MAX_CACHE = 500;
-// 单条描述截断长度，避免超长文本挤占聊天记录。
-const MAX_CHARS = 300;
 
 /** 普通图片描述器：内存缓存 + 任务去重，图片与描述都不落盘。 */
 export class ImageDescriber {
@@ -46,11 +44,11 @@ export class ImageDescriber {
     return task;
   }
 
-  // 实际识图：下载（按配置上限）→ 描述 → 清洗 → 截断；失败返回 undefined。
+  // 实际识图：下载（按配置上限）→ 描述 → 清洗；失败返回 undefined。
   private async run(url: string): Promise<string | undefined> {
     try {
       const image = await downloadImage(url, config.images.maxBytes);
-      const description = cleanDescription(await this.describe(dataUrl(image))).slice(0, MAX_CHARS);
+      const description = cleanDescription(await this.describe(dataUrl(image)));
       if (description) logger.info(`[image] ${description}`);
       // 空字符串归一为 undefined，让调用方统一按「无描述」处理
       return description || undefined;
