@@ -96,7 +96,8 @@ const COMMANDS = new Map([
 ]);
 
 // 后台补全（识图、拉引用、查群名片）的等待上限：到点即使没完成也照常判断，避免一条图片消息卡住整批。
-const MEDIA_WAIT_MS = 8000;
+// 必须大于 VISION_TIMEOUT_MS（启动时校验），否则识图会先被这里截断、永远等不到描述。
+export const MEDIA_WAIT_MS = 35000;
 
 
 /**
@@ -418,8 +419,14 @@ export class ChatRuntime {
         logger.info(`[chat] ${session.key} 本批已被群管理处理，跳过 AI 回复 :: ${summarize(pending)}`);
         return; // finally 里仍会重置 busy 并重新 schedule
       }
-      // 等识图/引用/名片补全，最多 MEDIA_WAIT_MS；超时就用已就绪的部分继续。
-      await Promise.race([Promise.all(pending.map((record) => record.ready)), sleep(MEDIA_WAIT_MS)]);
+      // 等识图/引用/名片补全，最多 MEDIA_WAIT_MS；超时就用已就绪的部分继续，并记 warn 以便排查。
+      const ready = await Promise.race([
+        Promise.all(pending.map((record) => record.ready)).then(() => true),
+        sleep(MEDIA_WAIT_MS).then(() => false),
+      ]);
+      if (!ready) {
+        logger.warn(`[chat] ${session.key} 媒体补全超时（${MEDIA_WAIT_MS}ms），按已就绪内容继续 :: ${summarize(pending)}`);
+      }
       const now = Date.now();
       // pending 在历史里也有一份，用 Set 区分「本批新消息」与「上文」。
       const pendingSet = new Set(pending);
@@ -693,8 +700,16 @@ export class ChatRuntime {
     await Promise.all(
       segments.map(async (segment) => {
         // 表情包和普通图片用各自的存储器识别。
-        const source = isSticker(segment) ? this.deps.stickers : this.deps.images;
-        const description = await source?.observe(segment).catch(() => undefined);
+        const sticker = isSticker(segment);
+        const source = sticker ? this.deps.stickers : this.deps.images;
+        let description: string | undefined;
+        try {
+          description = await source?.observe(segment);
+        } catch (error) {
+          // 单段识图抛错不让整批静默失败：记 warn 说明是图片还是表情包。
+          logger.warn(`[chat] ${sticker ? "表情包" : "图片"}识图异常:`, (error as Error).message);
+          return;
+        }
         if (description) descriptions.set(segment, description);
       }),
     );

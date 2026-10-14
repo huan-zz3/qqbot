@@ -9,7 +9,7 @@
  * （例如无 decider 时 gate 走兜底判定、搜索不可用时不给模型挂搜索工具）。
  */
 import { config } from "./config.js";
-import { ChatRuntime } from "./chat/runtime.js";
+import { ChatRuntime, MEDIA_WAIT_MS } from "./chat/runtime.js";
 import { extractRar } from "./chat/extract-rar.js";
 import { extractZip } from "./chat/extract-zip.js";
 import { FileStore, type CallAction } from "./chat/files.js";
@@ -59,6 +59,13 @@ async function main(): Promise<void> {
     if (!(config.vision.timeoutMs > 0) || !(config.vision.maxTokens > 0)) {
       logger.error(
         `VISION_TIMEOUT_MS 与 VISION_MAX_TOKENS 必须为正数（当前 ${config.vision.timeoutMs} / ${config.vision.maxTokens}）`,
+      );
+      process.exit(1);
+    }
+    // 识图超时必须小于媒体补全等待上限，否则批次会先因 MEDIA_WAIT_MS 到点而放弃识图，永远等不到描述。
+    if (config.vision.timeoutMs >= MEDIA_WAIT_MS) {
+      logger.error(
+        `VISION_TIMEOUT_MS（当前 ${config.vision.timeoutMs}）必须小于媒体补全等待上限 ${MEDIA_WAIT_MS}，否则识图会被提前截断`,
       );
       process.exit(1);
     }
@@ -360,7 +367,7 @@ async function main(): Promise<void> {
   const opencodeInput =
     [config.opencode.inputPrefix && "pre", config.opencode.inputSuffix && "suf"].filter(Boolean).join("+") || "off";
   logger.info(
-    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} vision=${visionNeeded ? VISION_MODEL : "off"} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${materials ? `on(${config.files.dir},keep=${Math.round(config.files.keepMs / 3600000)}h)` : config.files.enabled ? "off(materialize)" : "off"} stickers=${stickers ? `${stickers.size}(archive=${stickers.archiveSize})` : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} vision=${visionNeeded ? `${VISION_MODEL}/${config.vision.detail}/t${config.vision.timeoutMs}/mt${config.vision.maxTokens}/wait${MEDIA_WAIT_MS}` : "off"} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${materials ? `on(${config.files.dir},keep=${Math.round(config.files.keepMs / 3600000)}h)` : config.files.enabled ? "off(materialize)" : "off"} stickers=${stickers ? `${stickers.size}(archive=${stickers.archiveSize})` : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();

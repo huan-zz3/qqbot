@@ -19,10 +19,15 @@ export const VISION_MODEL = "deepseek-ai/DeepSeek-OCR";
 const VISION_BASE_URL = "https://api.siliconflow.cn/v1";
 
 /** /chat/completions 原始响应中本模块用到的字段，其余忽略。 */
-type VisionResponse = { choices?: Array<{ message?: { content?: string | null } }> };
+type VisionResponse = {
+  choices?: Array<{ message?: { content?: string | null; reasoning_content?: string | null } }>;
+};
 
 /**
  * 识图：把图片（data URL）与指令一起发给识图模型，返回描述文本。
+ *
+ * 返回空串表示「云端 200 但没给出内容」（调用方据此记 warn，不静默）；
+ * 响应结构异常（缺少 choices/message）则抛错，交由调用方按失败处理。
  *
  * @param dataUrl 图片的 data URL
  * @param instruction 识图指令
@@ -61,5 +66,9 @@ export async function describeImage(dataUrl: string, instruction: string): Promi
     throw new Error(`识图请求失败 (${response.status}): ${text.slice(0, 500)}`);
   }
   const result = (await response.json()) as VisionResponse;
-  return result.choices?.[0]?.message?.content?.trim() ?? "";
+  const message = result.choices?.[0]?.message;
+  // 结构异常（没有 choices/message）不能悄悄当空串，否则会表现为「图片没描述却查不出原因」。
+  if (!message) throw new Error(`识图响应缺少 choices/message: ${JSON.stringify(result).slice(0, 500)}`);
+  // 只取 content（若上游返回 reasoning_content 则忽略）。内容为空时返回空串，由调用方记 warn。
+  return message.content?.trim() ?? "";
 }

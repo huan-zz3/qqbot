@@ -217,8 +217,10 @@ export const config = {
     apiKey: str("VISION_API_KEY"),
     // 传给 SiliconFlow image_url 的细节级别：low / high / auto（非法值启动即报错）。
     detail: str("VISION_DETAIL", "high"),
-    timeoutMs: num("VISION_TIMEOUT_MS", 60000),
-    maxTokens: num("VISION_MAX_TOKENS", 300),
+    // 识图超时（毫秒）：须为正且小于 MEDIA_WAIT_MS（启动校验），否则识图会被等待上限提前截断。
+    timeoutMs: num("VISION_TIMEOUT_MS", 30000),
+    // 输出上限：描述最终嵌进单行聊天记录，收在 512 以压低最坏延迟。
+    maxTokens: num("VISION_MAX_TOKENS", 512),
   },
   // 联网搜索：连一个远程 MCP 服务器，把它暴露的全部工具挂给模型（无常驻凭证）。
   search: {

@@ -11,8 +11,8 @@ import { logger } from "../logger.js";
 import type { Segment } from "../napcat/types.js";
 import { cleanDescription, dataUrl, downloadImage, type Describe } from "./media.js";
 
-// 识图提示词：DeepSeek-OCR 官方推荐的「图像描述」模板（<image> 为图片占位 token）。
-const DESCRIBE_PROMPT = "<image>\nDescribe this image in detail. If there are any words on the picture, write them all in. Only objective descriptions are output. Subjective evaluations are prohibited.";
+// 识图提示词：要求「客观、含图中所有文字」的图像描述模板。
+const DESCRIBE_PROMPT = "<image>\nDescribe this image in detail.";
 // 内存缓存上限：图片描述只是临时上下文，进程重启即清空，500 条足够覆盖近期图片。
 const MAX_CACHE = 500;
 
@@ -36,7 +36,7 @@ export class ImageDescriber {
     const key = typeof segment.data.file === "string" && segment.data.file ? segment.data.file : url;
     let task = this.cache.get(key);
     if (!task) {
-      task = this.run(url);
+      task = this.run(url, key);
       this.cache.set(key, task);
       // Map 保持插入顺序：超限时删最早的一条
       if (this.cache.size > MAX_CACHE) this.cache.delete(this.cache.keys().next().value!);
@@ -44,17 +44,21 @@ export class ImageDescriber {
     return task;
   }
 
-  // 实际识图：下载（按配置上限）→ 描述 → 清洗；失败返回 undefined。
-  private async run(url: string): Promise<string | undefined> {
+  // 实际识图：下载（按配置上限）→ 描述 → 清洗；失败或空描述都记可见日志后返回 undefined。
+  private async run(url: string, key: string): Promise<string | undefined> {
     try {
       const image = await downloadImage(url, config.images.maxBytes);
       const description = cleanDescription(await this.describe(dataUrl(image)));
-      if (description) logger.info(`[image] ${description}`);
-      // 空字符串归一为 undefined，让调用方统一按「无描述」处理
-      return description || undefined;
+      if (description) {
+        logger.info(`[image] ${description}`);
+        return description;
+      }
+      // 云端 200 但没有可用描述（模型输出为空，或清洗后为空）：明确记 warn，避免「图片没描述」无迹可循。
+      logger.warn(`[image] 识图无有效描述 ${key}`);
+      return undefined;
     } catch (error) {
-      // 识图失败只记 debug：消息不带描述继续，不影响聊天
-      logger.debug("[image] 跳过:", (error as Error).message);
+      // 下载/云端失败不再静默：记 warn（含图片来源标识），消息不带描述继续，不影响聊天。
+      logger.warn(`[image] 识图失败 ${key}:`, (error as Error).message);
       return undefined;
     }
   }

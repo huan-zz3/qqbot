@@ -58,8 +58,8 @@ export type ArchivedSticker = {
 const MAX_BYTES = 3 * 1024 * 1024;
 // 归档文件名：与 index.json 同目录，独立存放淘汰后保留的描述。
 const ARCHIVE_FILE = "archive.json";
-// 识图提示词：DeepSeek-OCR 官方推荐的「图像描述」模板（<image> 为图片占位 token），并要求一句话输出。
-const DESCRIBE_PROMPT = "<image>\nDescribe this image in detail. Output in one sentence.";
+// 识图提示词：要求一句话的客观图像描述（<image> 为图片占位 token）。
+const DESCRIBE_PROMPT = "<image>\nDescribe this image in detail.";
 
 // 生成去重键：mface 优先 emoji_id（退回 key），图片用 file（退回 url）；
 // 两者都拿不到时返回 undefined，表示这张表情无法收藏。
@@ -250,8 +250,8 @@ export class StickerStore {
       logger.info(`[sticker] 收藏 #${sticker.id} ${description}`);
       return sticker;
     } catch (error) {
-      // 收藏失败只记 debug：不阻塞聊天流程，下次出现还能重试
-      logger.debug(`[sticker] 跳过 ${key}:`, (error as Error).message);
+      // 收藏失败记 warn（含去重键）：不阻塞聊天流程，下次出现还能重试，但不再静默。
+      logger.warn(`[sticker] 收藏失败 ${key}:`, (error as Error).message);
       return undefined;
     }
   }
@@ -275,7 +275,7 @@ export class StickerStore {
       } else {
         // 普通图片必须重新下载才能重发
         if (!url) {
-          logger.debug(`[sticker] 归档 ${key} 无下载地址，无法提升`);
+          logger.warn(`[sticker] 归档提升失败 ${key}: 无下载地址`);
           return undefined;
         }
         const image = await downloadImage(url, MAX_BYTES);
@@ -300,8 +300,8 @@ export class StickerStore {
       logger.info(`[sticker] 归档提升 #${sticker.id} ${sticker.description}`);
       return sticker;
     } catch (error) {
-      // 物化失败：保留归档条目，下次出现再试；不静默（debug 可见）
-      logger.debug(`[sticker] 归档提升失败 ${key}:`, (error as Error).message);
+      // 物化失败：保留归档条目，下次出现再试；记 warn 不再静默。
+      logger.warn(`[sticker] 归档提升失败 ${key}:`, (error as Error).message);
       return undefined;
     }
   }

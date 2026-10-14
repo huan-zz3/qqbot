@@ -203,7 +203,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `REPLY_FORWARD_PARTS` / `REPLY_FORWARD_CHARS` | 5 / 300 | 回复超过这么多行或字就改发合并转发（第一条文本单独发，其余合并） |
 | `VISION_API_KEY` | | 图像识别（SiliconFlow DeepSeek-OCR）的密钥，与回复模型分开；只开图片 / 表情包任一功能时必填，否则启动报错退出 |
 | `VISION_DETAIL` | high | 传给识图接口 `image_url` 的细节级别：`low` / `high` / `auto`，非法值启动报错退出 |
-| `VISION_TIMEOUT_MS` / `VISION_MAX_TOKENS` | 60000 / 300 | 识图请求超时（毫秒）与输出上限；须为正，否则启动报错退出 |
+| `VISION_TIMEOUT_MS` / `VISION_MAX_TOKENS` | 30000 / 512 | 识图请求超时（毫秒）与输出上限；须为正，且超时须小于媒体补全等待上限（`MEDIA_WAIT_MS`=35000），否则启动报错退出 |
 | `IMAGES_ENABLED` | true | 普通图片识图（图像识别后端写死为 SiliconFlow 的 `deepseek-ai/DeepSeek-OCR`，模型名不可配） |
 | `FILES_ENABLED` | true | 聊天压缩包能力：记录里显示 `[文件：…]`，并把本批发言人的 zip/rar 解压给模型 |
 | `FILES_MATERIALIZE` | true | 是否下载解压压缩包（与 `OPENCODE_ENABLED` 解耦）；关掉则不下载，仅保留记录展示 |

@@ -5,7 +5,8 @@
  * - 请求发往写死的 SiliconFlow 端点 /v1/chat/completions，带 Bearer 鉴权；
  * - 请求体 model 恒为 deepseek-ai/DeepSeek-OCR、stream=false、max_tokens 取配置；
  * - user content 为内容块数组：图片块（data URL + detail）在前、文本指令在后；
- * - 返回 choices[0].message.content 的 trim 结果；
+ * - 返回 choices[0].message.content 的 trim 结果（忽略可能存在的 reasoning_content）；
+ * - content 为空时返回空串；缺少 choices/message 时抛错；
  * - 非 2xx 时抛错，错误信息带上状态码与截断的响应体。
  *
  * 说明：globalThis.fetch 全部 mock，不触网；env 必须在动态 import 之前设置。
@@ -64,4 +65,15 @@ test("sends image then text to the hardcoded SiliconFlow endpoint", async () => 
 test("throws with status and body on non-2xx", async () => {
   mockFetch({ message: "Invalid token" }, 401);
   await assert.rejects(describeImage("data:image/png;base64,AAAA", "x"), /401/);
+});
+
+test("returns empty string when content is empty and ignores reasoning_content", async () => {
+  mockFetch({ choices: [{ message: { content: "", reasoning_content: "先想想…" } }] });
+  const text = await describeImage("data:image/png;base64,AAAA", "x");
+  assert.equal(text, "");
+});
+
+test("throws when choices/message is missing", async () => {
+  mockFetch({ choices: [] });
+  await assert.rejects(describeImage("data:image/png;base64,AAAA", "x"), /choices\/message/);
 });
