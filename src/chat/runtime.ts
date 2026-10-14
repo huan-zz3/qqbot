@@ -3,11 +3,12 @@
  *
  * 关键概念：
  * - Session：以 `group:<群号>` / `private:<QQ号>` 为 key 的会话状态，包含历史 SessionHistory、
- *   待判断批次 pending、防抖定时器 timer、忙碌标志 busy 与记忆学习水位 learnedMark。
+ *   待判断批次 pending、防抖定时器 timer、忙碌标志 busy 与待整理记忆批 learnPending。
  * - pending / firstPendingAt：尚未交给 gate 判断的新消息及其首条到达时间；防抖等待从首条消息算起，
  *   总时长不超过 config.gate.maxWaitMs（GATE_MAX_WAIT_MS）。
  * - busy：同一会话同一时刻只处理一批；处理结束在 finally 里重新 schedule，天然串行。
- * - learnedMark：已整理进长期记忆的历史条数水位（对应 SessionHistory.total，可跨越历史裁剪）。
+ * - learnPending / learnTimer：记忆学习只发生在 bot 实际回复后，范围为触发该次回复的整批消息；
+ *   延迟窗（MEMORY_LEARN_DELAY_MS）内多次回复在此累积，到点合并成一次学习。
  * - sinceBot：群会话自上次发言/上次强制以来累计的群消息数。仅 GATE_FORCE_REPLY_GROUPS 内的群计数，
  *   达到 GATE_FORCE_REPLY_MESSAGES 时该群下一批强制回复一次（gate 的 ctx.force）；机器人发言、
  *   强制判定作出、或 /停止 时清零。仅群聊，私聊恒为 0。
@@ -65,7 +66,7 @@ type Session = {
   firstPendingAt: number | undefined; // 本批首条消息的到达时间，用于 maxWaitMs 兜底
   timer: NodeJS.Timeout | undefined; // 防抖定时器；每来一条新消息就重置
   busy: boolean; // 是否正在处理一批，防止同一会话并发判断/回复
-  learnedMark: number; // 已整理进记忆的历史水位
+  learnPending: ChatRecord[]; // 已回复、等待延迟整理的触发批（窗口内多次回复在此累积）
   learnTimer: NodeJS.Timeout | undefined; // 记忆整理定时器
   sinceBot: number; // 自上次发言/上次强制以来累计的群消息数（仅 GATE_FORCE_REPLY_GROUPS 内的群计）
 };
@@ -99,6 +100,8 @@ const COMMANDS = new Map([
 // 必须大于 VISION_TIMEOUT_MS（启动时校验），否则识图会先被这里截断、永远等不到描述。
 export const MEDIA_WAIT_MS = 35000;
 
+// 待整理记忆批的条数上限：超过即立即整理，防止延迟窗被连续回复不停重置而无限累积。
+const MEMORY_LEARN_PENDING_MAX = 200;
 
 /**
  * 聊天运行时：接管 NapCat 消息事件，按会话编排防抖、判断、生成、发送与记忆整理。
@@ -217,10 +220,6 @@ export class ChatRuntime {
     // 累计强制回复：仅对启用名单内的群，累加自上次发言/上次强制以来的群消息。
     if (this.forceReplyEnabled(groupId)) session.sinceBot += 1;
     this.schedule(session);
-    // 批量学习仅在机器人最近参与过对话的会话里进行（engagement 窗口内）。
-    const lastBotAt = session.history.presence(config.memory.engagedWindowMs, Date.now()).lastBotAt;
-    const engaged = lastBotAt !== undefined && Date.now() - lastBotAt <= config.memory.engagedWindowMs;
-    if (engaged && session.history.total - session.learnedMark >= config.memory.learnBatch) this.scheduleLearn(session, 0);
   }
 
   /** 取（或首次创建）事件对应的会话；群聊首次见到时异步加载群名。 */
@@ -239,7 +238,7 @@ export class ChatRuntime {
         firstPendingAt: undefined,
         timer: undefined,
         busy: false,
-        learnedMark: 0,
+        learnPending: [],
         learnTimer: undefined,
         sinceBot: 0,
       };
@@ -285,6 +284,7 @@ export class ChatRuntime {
       if (session.learnTimer) clearTimeout(session.learnTimer);
       session.timer = undefined;
       session.learnTimer = undefined;
+      session.learnPending = [];
       session.pending = [];
       session.firstPendingAt = undefined;
       // 停机同样不参与：清零累计，避免恢复后旧计数立刻触发一次强制回复。
@@ -564,7 +564,8 @@ export class ChatRuntime {
       const quoteOf = quoted ? { name: target.name, text: target.text, fromBot: false } : undefined;
       this.recordSent(session, await this.deps.client.sendMessage(session.target, segments), sent.text, quoteOf);
     }
-    // 回复后延迟整理记忆，等对话自然停下。
+    // 记忆学习只针对本次回复的触发批：把本批并入待学集合，延迟整理等对话自然停下。
+    for (const record of pending) if (!session.learnPending.includes(record)) session.learnPending.push(record);
     this.scheduleLearn(session, config.memory.learnDelayMs);
   }
 
@@ -615,21 +616,30 @@ export class ChatRuntime {
   private scheduleLearn(session: Session, delay: number): void {
     if (!this.deps.memory) return;
     if (session.learnTimer) clearTimeout(session.learnTimer);
+    // 待学批过大时立即整理，避免窗口被连续回复不断重置而无限累积。
+    if (session.learnPending.length >= MEMORY_LEARN_PENDING_MAX) {
+      logger.info(`[memory] ${session.key} 待整理批达上限 ${MEMORY_LEARN_PENDING_MAX}，立即整理`);
+      delay = 0;
+    }
     session.learnTimer = setTimeout(() => void this.learn(session), delay);
   }
 
   /**
-   * 把一批历史整理进长期记忆：按 learnedMark 取增量，先推进水位再学习
-   *（学习失败只记警告、不重试，避免同一批反复消耗模型调用）。
+   * 整理一批触发过回复的消息进长期记忆：取走并清空待学集合后交给 MemoryStore.learn。
+   * 失败只记警告、不重试，避免同一批反复消耗模型调用。
    */
   private async learn(session: Session): Promise<void> {
     session.learnTimer = undefined;
-    const records = session.history.since(session.learnedMark);
-    session.learnedMark = session.history.total;
-    // 整批都是机器人自己的消息时没有可学内容，跳过。
-    if (!records.some((record) => !record.fromBot)) return;
+    const records = session.learnPending;
+    session.learnPending = [];
+    // 定时器到点却无待学内容属异常，记 info 便于发现逻辑错位，不静默。
+    if (records.length === 0) {
+      logger.info(`[memory] ${session.key} 到点但无待整理内容`);
+      return;
+    }
     try {
-      await this.deps.memory!.learn(session.scope, session.label, records, config.bot.name);
+      const updated = await this.deps.memory!.learn(session.scope, session.label, records, config.bot.name);
+      logger.info(`[memory] ${session.key} 整理 ${records.length} 条，更新 ${updated} 人`);
     } catch (error) {
       logger.warn(`[memory] ${session.key} 整理失败:`, (error as Error).message);
     }

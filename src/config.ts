@@ -322,15 +322,12 @@ export const config = {
     // 超过这个大小的图片不下载。
     maxBytes: num("IMAGES_MAX_BYTES", 8 * 1024 * 1024),
   },
-  // 长期记忆（按 QQ 号，群/私聊分开）。
+  // 长期记忆（按 QQ 号，群/私聊分开）。学习只发生在 bot 实际回复后，范围为该次回复的触发批。
   memory: {
     enabled: bool("MEMORY_ENABLED", true),
     file: str("MEMORY_FILE", "data/memory.json"),
-    // bot 回复后等这么久再整理记忆；未整理消息攒够 learnBatch 条则不等。
+    // 回复后等这么久再整理记忆，让一次对话尾巴上的连续回复合并为一次。
     learnDelayMs: num("MEMORY_LEARN_DELAY_MS", 10000),
-    learnBatch: num("MEMORY_LEARN_BATCH", 30),
-    // 没有回复触发的批量整理，仅在 bot 于该时间窗内说过话的会话进行。
-    engagedWindowMs: num("MEMORY_ENGAGED_WINDOW_MS", 30 * 60 * 1000),
     // 每人最多保留的记忆条数。
     maxFacts: num("MEMORY_MAX_FACTS", 20),
   },

@@ -3,8 +3,8 @@
  *
  * 数据模型：每个 Person 对应一个 QQ 号，group/private 数组分别保存该人在群聊、
  * 私聊里被记住的事实；回复时私聊来源的事实标注「私聊里告诉你的」。
- * 学习流程：runtime 在对话停下后调用 learn()，把「场景 + 已有记忆 + 新聊天记录」
- * 交给 extract（deepseek-flash JSON 调用）；只允许更新本批次实际发言的人，
+ * 学习流程：runtime 在 bot 实际回复后调用 learn()（范围为触发该次回复的那批消息），
+ * 把「场景 + 已有记忆 + 新聊天记录」交给 extract（deepseek-flash JSON 调用）；只允许更新本批次实际发言的人，
  * 事实去重、单条截断（MAX_FACT_CHARS 字符）后写入。
  * 持久化：内存 Map 为唯一数据源，变更后 scheduleSave() 延迟 2 秒合并写盘，
  * flush() 立即落盘（临时文件 + rename 原子替换，权限 0o600）。
