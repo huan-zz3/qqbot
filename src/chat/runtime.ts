@@ -596,14 +596,16 @@ export class ChatRuntime {
   }
 
   /**
-   * 发送 opencode 开始探索的提示并写入历史（复用 recordSent，产生同一套 [send] 日志）。
+   * 发送 opencode 开始探索的提示：只记账（归零 + [send] 日志），**不写入会话历史**——
+   * 这行提示若进上下文，会被模型照抄成回复（假装在调查却没真调用 opencode）。
    * 提示属于附属行为：发送失败只记 warn、不重抛，避免中断正在进行的探索任务。
    */
   private async sendOpencodeNotice(session: Session): Promise<void> {
     const text = config.opencode.notice;
     if (!text) return;
     try {
-      this.recordSent(session, await this.deps.client.sendMessage(session.target, [textSegment(text)]), text);
+      await this.deps.client.sendMessage(session.target, [textSegment(text)]);
+      this.markSent(session, text);
     } catch (error) {
       logger.warn(`[send] ${session.key} opencode 提示发送失败:`, (error as Error).message);
     }
@@ -659,6 +661,16 @@ export class ChatRuntime {
     }
   }
 
+  /**
+   * 记录「机器人发了一条消息」的副作用，但不写入会话历史：累计强制回复归零 + [send] 日志。
+   * 供不需要进入模型上下文的消息复用（如 opencode 开场通知）。
+   */
+  private markSent(session: Session, text: string): void {
+    // 机器人自己发了言，累计归零。
+    session.sinceBot = 0;
+    logger.info(`[send] ${session.key} ${text}`);
+  }
+
   /** 把机器人自己发出的消息写入历史并记日志；这类记录的各 @/回复标记恒为 false。 */
   private recordSent(session: Session, messageId: number | undefined, text: string, quote?: Quote): void {
     session.history.add({
@@ -673,9 +685,8 @@ export class ChatRuntime {
       replyToBot: false,
       mentionsBot: false,
     });
-    // 机器人自己发了言，累计归零（含普通回复、合并转发与降级、opencode 提示）。
-    session.sinceBot = 0;
-    logger.info(`[send] ${session.key} ${text}`);
+    // 机器人自己发了言，累计归零 + 记日志（含普通回复、合并转发与降级）。
+    this.markSent(session, text);
   }
 
   // 本群成员的显示名 → QQ 号映射，供回复里的 "@名字" 发成真 @。
