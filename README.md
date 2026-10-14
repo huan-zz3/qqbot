@@ -19,8 +19,8 @@
 
 - 像群友一样判断时机：新消息先攒一小批，交给 decider —— 一个通用的“判定接口”（本项目默认接 [Perplexity Decisions API](https://docs.perplexity.ai)，端点 / 密钥 / 模型都在 `.env` 里配）—— 给出“该不该接话”的概率。被 @ 或被回复只是降低门槛，“哈哈哈”之类的收尾照样可以不回。
 - 只用 deepseek-flash 说话：提示词只交代事实（QQ 不渲染 Markdown、每行是一条消息、可以选择不说），不规定长度语气，也不给示例句。
-- 表情包：自动收藏群友发的表情包，用 deepseek-flash 识图写描述；模型想发时自己挑。QQ 小黄脸按名字收发（`[doge]` 会发成真表情）。
-- 看得懂图片：普通图片也用 deepseek-flash 识图，以 `[图片：描述]` 出现在聊天记录里。
+- 表情包：自动收藏群友发的表情包，用识图模型（独立后端，SiliconFlow 的 DeepSeek-OCR）写描述；模型想发时自己挑。QQ 小黄脸按名字收发（`[doge]` 会发成真表情）。
+- 看得懂图片：普通图片也交给识图模型识别，以 `[图片：描述]` 出现在聊天记录里。
 - 连发多条，长了就合并转发：每行一条消息，按打字速度间隔发出；回复长到超过 5 行或 300 字时，第一条文本单独发出，从第二条起合并成一条转发，不刷屏。
 - 联网搜索：decider 觉得可能需要查资料时，把一个远程 MCP 搜索服务器（多引擎搜索 + 抓取网页正文）暴露的工具挂给模型，搜不搜、抓不抓由模型决定。
 - 只读问代码（可选）：让模型在预定义的代码仓库里检索、阅读并回答问题（`opencode acp`，可用短名切换仓库）。只读由三重保障：不声明 fs 能力、拒绝一切权限请求、子进程注入只读配置 deny 掉写/命令/联网类工具。群友发来的 zip/rar 日志会被解压到本地目录，模型可让 opencode 去读（见「聊天压缩包联动」）。
@@ -56,7 +56,8 @@ NapCat ──WS──> 收消息 ──防抖合并──> decider 判断 ──
 
 - Node.js ≥ 22、pnpm
 - 一个已登录的 NapCat（推荐 [NapCat-Docker](https://github.com/NapNeko/NapCat-Docker)）
-- [DeepSeek API key](https://platform.deepseek.com/)
+- [DeepSeek API key](https://platform.deepseek.com/)（回复模型）
+- [SiliconFlow API key](https://cloud.siliconflow.cn/)（图像识别，独立于回复模型；只开图片/表情包任一功能才需要）
 - [Perplexity API key](https://console.perplexity.ai)（decider，可选）
 
 ### 1. 在 NapCat 里开 WebSocket 服务端
@@ -200,7 +201,10 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `DEEPSEEK_TEMPERATURE` | 1.1 | 回复的采样温度；1.3 会冒出奇怪的外文标点和单词 |
 | `SEARCH_MAX_TOOL_ROUNDS` / `OPENCODE_MAX_TOOL_ROUNDS` | 3 / 3 | 联网搜索组、opencode 组各自独立的工具轮数上限；某组用满只撤该组并提示该工具不可用，两组都用满才不再挂工具并追加「纯文本作答」收尾指令 |
 | `REPLY_FORWARD_PARTS` / `REPLY_FORWARD_CHARS` | 5 / 300 | 回复超过这么多行或字就改发合并转发（第一条文本单独发，其余合并） |
-| `IMAGES_ENABLED` | true | 普通图片识图 |
+| `VISION_API_KEY` | | 图像识别（SiliconFlow DeepSeek-OCR）的密钥，与回复模型分开；只开图片 / 表情包任一功能时必填，否则启动报错退出 |
+| `VISION_DETAIL` | high | 传给识图接口 `image_url` 的细节级别：`low` / `high` / `auto`，非法值启动报错退出 |
+| `VISION_TIMEOUT_MS` / `VISION_MAX_TOKENS` | 60000 / 300 | 识图请求超时（毫秒）与输出上限；须为正，否则启动报错退出 |
+| `IMAGES_ENABLED` | true | 普通图片识图（图像识别后端写死为 SiliconFlow 的 `deepseek-ai/DeepSeek-OCR`，模型名不可配） |
 | `FILES_ENABLED` | true | 聊天压缩包能力：记录里显示 `[文件：…]`，并把本批发言人的 zip/rar 解压给模型 |
 | `FILES_MATERIALIZE` | true | 是否下载解压压缩包（与 `OPENCODE_ENABLED` 解耦）；关掉则不下载，仅保留记录展示 |
 | `FILES_DIR` / `FILES_MAX_BYTES` / `FILES_MAX_FILES` | data/uploads / 50MB / 3 | 解压根目录（相对值会在启动时解析为绝对路径）、单包下载上限（流式边读边限）、单批最多处理几个包 |
@@ -217,7 +221,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 
 ## 表情包与记忆
 
-- 表情包：收藏表情和商城表情第一次出现时下载下来，deepseek-flash 识图写一句描述，存在 `data/stickers/`。聊天记录里显示为 `[表情包：描述]`；群友发得最多的 40 张打乱顺序后随系统提示词给模型（不按它自己用过的次数排，免得越用越偏向那几张），它单独一行写 `[表情包#编号]` 就会发出去。收藏超过上限时淘汰最少用的（只删图片文件），被淘汰的表情的**描述会转入归档**（`data/stickers/archive.json`）：之后它再出现时直接复用归档描述、**不会重新识图**（省 token），并在活跃收藏有空间或它的分数不低于活跃最低分时提升回收藏。
+- 表情包：收藏表情和商城表情第一次出现时下载下来，识图模型写一句描述，存在 `data/stickers/`。聊天记录里显示为 `[表情包：描述]`；群友发得最多的 40 张打乱顺序后随系统提示词给模型（不按它自己用过的次数排，免得越用越偏向那几张），它单独一行写 `[表情包#编号]` 就会发出去。收藏超过上限时淘汰最少用的（只删图片文件），被淘汰的表情的**描述会转入归档**（`data/stickers/archive.json`）：之后它再出现时直接复用归档描述、**不会重新识图**（省 token），并在活跃收藏有空间或它的分数不低于活跃最低分时提升回收藏。
 - 普通图片：同样识图，但只在内存里缓存描述，不保存图片。
 - QQ 小黄脸：收到的显示为 `[名称]`；模型写出已知名称时发成真表情。名称表 [`src/napcat/faces.ts`](src/napcat/faces.ts) 取自 QQ NT 客户端的 `default_config.json`。
 - 记忆：bot 回复过后等对话停下，或（在它最近 30 分钟说过话的会话里）未整理的消息攒够一批时，让 deepseek-flash 更新对每个发言者的记忆：只记长期有效的（身份、喜好、关系、重要经历），不记一次性的事和玩笑，也不记住址、学校、联系方式这类隐私。按 QQ 号存在 `data/memory.json`，群聊和私聊分开记。回复时带上聊天里出现的人、以及被 @ 的人的记忆，私聊学到的标注“私聊里告诉你的”。
@@ -339,7 +343,9 @@ src/
 ├── decider/
 │   ├── questions.ts      判定输入/问题的类型与 noul 构造
 │   └── client.ts         通用判定请求（POST state + questions）
-├── llm/deepseek.ts       deepseek-flash：工具循环、识图、JSON（失败重试一次）
+├── llm/
+│   ├── deepseek.ts       回复模型 deepseek-flash：工具循环、JSON（失败重试一次）
+│   └── vision.ts         图像识别后端（写死 SiliconFlow deepseek-ai/DeepSeek-OCR）
 ├── search/               MCP 联网搜索客户端
 ├── opencode/             只读 OpenCode（ACP）：进程编排、子进程环境（代理 + 只读加固）、目录选择、模型选择、权限裁决
 └── cli/learn-history.ts  从历史记录补学记忆
@@ -357,7 +363,7 @@ pnpm typecheck
 
 - NapCat 属于非官方客户端，QQ 账号有被风控的风险，建议用小号。
 - 联网搜索依赖外部 MCP 服务器（streamable HTTP）的可用性；它挂掉的期间搜索暂不挂载，之后按指数退避自动重连、成功后自动恢复，无需重启。
-- 记忆和表情包描述会把群友的发言交给 DeepSeek 处理，请在群里告知大家。
+- 记忆和表情包描述会把群友的发言交给 DeepSeek 处理，图片/表情包也会交给图像识别服务（SiliconFlow）处理，请在群里告知大家。
 - 启用只读 OpenCode 后，白名单群 / 私聊里的消息都可能驱动它读取 `OPENCODE_CWD` / `OPENCODE_DIRS` 里任一仓库的内容并转发到会话里；只读约束挡的是改动与执行，挡不住信息外泄，请自行评估仓库敏感度。
 
 ## 致谢

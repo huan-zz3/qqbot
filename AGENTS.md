@@ -3,7 +3,7 @@
 # qqbot Agent Notes
 
 - TypeScript QQ bot. NapCat OneBot v11 正向 WebSocket（NapCat 是服务端，bot 是客户端），参考 Mist-wu/OvO。
-- decider（通用判定接口，默认接 Perplexity Decisions API）决定该不该发言、以及（`needs_search > 0.1` 这么低的门槛）要不要给模型挂上联网搜索工具；端点/密钥/模型全部由 `DECIDER_API_URL`/`DECIDER_API_KEY`/`DECIDER_MODEL`（`.env`）配置，**代码里只有通用接口**，不含任何 provider 专有常量。`DECIDER_API_KEY` 可配多个（逗号/空白分隔，顺序即优先级），共用同一端点/模型：每次判定按优先级尝试，密钥失败（网络/超时/非 2xx）就换下一个，成功者提升为最高优先级（move-to-front，仅进程内存、重启回到配置顺序）；全失败才抛出交给调用方兜底（`decider/client.ts`，纯逻辑在 `decider/keys.ts`）。DeepSeek 写回复并决定是否真的搜索。只用 `deepseek-flash`（`DEEPSEEK_MODEL`，硬编码）——不要加别的模型或降级。
+- decider（通用判定接口，默认接 Perplexity Decisions API）决定该不该发言、以及（`needs_search > 0.1` 这么低的门槛）要不要给模型挂上联网搜索工具；端点/密钥/模型全部由 `DECIDER_API_URL`/`DECIDER_API_KEY`/`DECIDER_MODEL`（`.env`）配置，**代码里只有通用接口**，不含任何 provider 专有常量。`DECIDER_API_KEY` 可配多个（逗号/空白分隔，顺序即优先级），共用同一端点/模型：每次判定按优先级尝试，密钥失败（网络/超时/非 2xx）就换下一个，成功者提升为最高优先级（move-to-front，仅进程内存、重启回到配置顺序）；全失败才抛出交给调用方兜底（`decider/client.ts`，纯逻辑在 `decider/keys.ts`）。DeepSeek 写回复并决定是否真的搜索。**回复模型**只用 `deepseek-flash`（`DEEPSEEK_MODEL`，硬编码）——不要加别的模型或降级。**图像识别是与回复模型分开的独立后端**：写死 SiliconFlow 的 `deepseek-ai/DeepSeek-OCR`（模型名与端点都在 `llm/vision.ts` 里硬编码，不配 env），只有 `VISION_API_KEY`/`VISION_DETAIL`/`VISION_TIMEOUT_MS`/`VISION_MAX_TOKENS` 走 `.env`；是否启用由 `IMAGES_ENABLED`/`STICKERS_ENABLED` 决定，两者任一开启时缺 `VISION_API_KEY` 会 `index.ts` 启动即 `exit(1)`，都关则不需要识图 key。
 - 联网搜索连一个远程 MCP 服务器（`@modelcontextprotocol/sdk`，streamable HTTP），启动时 `tools/list` 拿到什么工具就挂什么，无常驻凭证。
 - 个人项目：模块小且可读，优先 `type`，注释从简。
 - 完整文档（中文）在 `README.md`；本文件只记 agent 容易踩的、不易从文件名看出的点。
@@ -54,7 +54,7 @@
 - `src/chat/reply.ts` 提示词、输出解析、分条或合并转发（超阈值时第一条文本单独发、从第二条起才合并，表情包始终排在转发之后）；`stickers.ts`/`images.ts`/`media.ts` 表情包与图片。
 - `src/chat/files.ts` 下载后端（解析地址 + 流式取字节，超过 `FILES_MAX_BYTES` 即中止）；`archive.ts` 压缩包纯逻辑（类型判定/条目名净化/限额/目录命名/清单/清理挑选）；`materials.ts` 物料化编排（下载→解压→文本转码→原子落盘→按目录缓存→清理）；`extract-zip.ts`（yauzl）/`extract-rar.ts`（node-unrar-js）解压驱动；`decode.ts` 文本字节多编码严格解码（BOM 优先，UTF-8→GB18030→Big5→Shift_JIS→EUC-KR，首个成功；**GB18030 会吞掉多数 Big5/SJIS/EUC-KR 字节**，命中编码记日志以便排查）。
 - `src/chat/memory.ts` 长期记忆（群/私聊分开，按 QQ 号）；`power.ts` 管理员 `/启动` `/停止`（持久化）；`history.ts` 会话消息记录。
-- `src/llm/deepseek.ts` deepseek-flash 工具循环（含工具额度用尽时的收尾指令）、识图、JSON（失败重试一次）。
+- `src/llm/deepseek.ts` 回复模型 deepseek-flash 工具循环（含工具额度用尽时的收尾指令）、JSON（失败重试一次）；`src/llm/vision.ts` 图像识别后端（写死 SiliconFlow deepseek-ai/DeepSeek-OCR，与回复模型互不引用）。
 - `src/search/mcp-search.ts` MCP 联网搜索客户端（连接、工具映射、调用）；`src/cli/learn-history.ts` 历史补学。
 - `src/schedule/scheduler.ts` 定时群发（cron，固定 Asia/Shanghai，受电源开关约束）。
 - `src/exec/cron-exec.ts` 定时执行本地 shell 命令（多条，只写日志，不受电源约束）；cron 工厂 `createCronJob` 在 `scheduler.ts`。

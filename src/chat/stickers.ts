@@ -2,7 +2,7 @@
  * stickers.ts —— 表情包收藏、识图描述与重发。
  *
  * 流程：群友发自定义表情（image）或商城表情（mface）时 observe() 首次入库——
- * 下载（上限 3MB）→ deepseek-flash 识图写一句描述 → 图片存 data/stickers/
+ * 下载（上限 3MB）→ 识图模型写一句描述（独立后端，见 src/llm/vision.ts）→ 图片存 data/stickers/
  * （文件名取去重键的 sha1 前 16 位）→ 记入 index.json（seen/used/lastSeen 计数）。
  * 聊天记录里显示为 `[表情包：描述]`；list() 把被群友发得最多的若干张打乱后随系统
  * 提示词给模型（不按 bot 自己用的次数排，防止自我强化），模型回复 `[表情包#编号]`
@@ -58,9 +58,8 @@ export type ArchivedSticker = {
 const MAX_BYTES = 3 * 1024 * 1024;
 // 归档文件名：与 index.json 同目录，独立存放淘汰后保留的描述。
 const ARCHIVE_FILE = "archive.json";
-// 识图提示词：只要求一句话说情绪/意思；有文字就原样带上，没有则不要提文字。
-const DESCRIBE_PROMPT =
-  "这是聊天里的一个表情包。用一句话说出它表达的情绪或意思。图上有文字就把文字原样写进这句话；没有文字就不要提文字。只输出这句话。";
+// 识图提示词：DeepSeek-OCR 官方推荐的「图像描述」模板（<image> 为图片占位 token），并要求一句话输出。
+const DESCRIBE_PROMPT = "<image>\nDescribe this image in detail. Output in one sentence. Return in Chinese.";
 
 // 生成去重键：mface 优先 emoji_id（退回 key），图片用 file（退回 url）；
 // 两者都拿不到时返回 undefined，表示这张表情无法收藏。

@@ -211,6 +211,15 @@ export const config = {
     // 只用于生成回复；试过 1.3，会冒出奇怪的外文标点和单词。
     temperature: num("DEEPSEEK_TEMPERATURE", 1.1),
   },
+  // 图像识别（视觉理解）：与回复模型分开的独立后端，模型与端点写死在 src/llm/vision.ts。
+  // 仅当 IMAGES_ENABLED 或 STICKERS_ENABLED 开启时才要求 VISION_API_KEY（校验见 index.ts）。
+  vision: {
+    apiKey: str("VISION_API_KEY"),
+    // 传给 SiliconFlow image_url 的细节级别：low / high / auto（非法值启动即报错）。
+    detail: str("VISION_DETAIL", "high"),
+    timeoutMs: num("VISION_TIMEOUT_MS", 60000),
+    maxTokens: num("VISION_MAX_TOKENS", 300),
+  },
   // 联网搜索：连一个远程 MCP 服务器，把它暴露的全部工具挂给模型（无常驻凭证）。
   search: {
     enabled: bool("SEARCH_MCP_ENABLED", true),

@@ -1,15 +1,15 @@
 /**
- * deepseek.ts —— deepseek-flash 的底层调用封装：聊天补全（含工具循环）、JSON 输出、识图。
+ * deepseek.ts —— 回复模型 deepseek-flash 的底层调用封装：聊天补全（含工具循环）、JSON 输出。
  *
  * 关键概念：
- * - 全项目只使用 deepseek-flash 一个模型（DEEPSEEK_MODEL 硬编码），不做模型切换或降级；
+ * - 回复只用 deepseek-flash 一个模型（DEEPSEEK_MODEL 硬编码），不做模型切换或降级；
+ *   图像识别是另一个独立后端（src/llm/vision.ts），与本模块互不引用；
  * - 工具循环 chatWithTools：模型可多轮调用工具，直到给出纯文本为止；工具按「组」各自
  *   计数，每组最多提供自己上限的轮数（SEARCH_MAX_TOOL_ROUNDS / OPENCODE_MAX_TOOL_ROUNDS）；
  *   某组用满只撤该组，全部组用满才不再挂工具，迫使模型收尾作答；
  * - DeepSeek 的坑：挂了工具时，前序 assistant 回合的 reasoning_content 必须原样回传，
  *   否则接口会以 400 拒绝请求（见 chatWithTools 中 assistant 消息的构造）；
- * - JSON 模式 completeJson：提示词本身必须提到 JSON；模型偶尔输出畸形 JSON，失败重试一次；
- * - 识图 describeImage：deepseek-flash 只接受 user 消息中的图片（ContentPart）。
+ * - JSON 模式 completeJson：提示词本身必须提到 JSON；模型偶尔输出畸形 JSON，失败重试一次。
  *
  * 依赖 config.deepseek（apiKey、baseUrl、超时、thinking、maxTokens、temperature）。
  */
@@ -43,9 +43,6 @@ export type ToolCall = {
   function: { name: string; arguments: string };
 };
 
-/** 多模态消息的内容块：文本，或图片 URL（此项目里是 data URL）。 */
-export type ContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
-
 /**
  * 发给 /chat/completions 的消息联合类型（OpenAI 兼容）。
  * - tool 消息通过 tool_call_id 与对应 assistant 消息的 tool_calls 一一对应；
@@ -53,7 +50,7 @@ export type ContentPart = { type: "text"; text: string } | { type: "image_url"; 
  */
 export type ChatMessage =
   | { role: "system"; content: string }
-  | { role: "user"; content: string | ContentPart[] }
+  | { role: "user"; content: string }
   | { role: "assistant"; content: string | null; reasoning_content?: string; tool_calls?: ToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
 
@@ -289,32 +286,6 @@ export async function completeJson(system: string, user: string, maxTokens = 200
       logger.debug("[deepseek] JSON 解析失败，重试");
     }
   }
-}
-
-/**
- * 识图：把图片（data URL）与指令一起发给模型，返回描述文本。
- * deepseek-flash 只接受 user 消息中的图片；此场景不挂工具。
- *
- * @param dataUrl 图片的 data URL
- * @param instruction 识图指令
- * @returns 模型输出文本（trim 后）；无内容时为空字符串
- */
-export async function describeImage(dataUrl: string, instruction: string): Promise<string> {
-  const result = await complete(
-    [
-      {
-        role: "user",
-        // 图片在前、指令文本在后。
-        content: [
-          { type: "image_url", image_url: { url: dataUrl } },
-          { type: "text", text: instruction },
-        ],
-      },
-    ],
-    [],
-    { maxTokens: 300 },
-  );
-  return result.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
 /**

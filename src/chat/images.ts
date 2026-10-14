@@ -1,7 +1,7 @@
 /**
  * images.ts —— 普通图片识图。
  *
- * 聊天里出现的非表情包图片交给 deepseek-flash 识图，结果以 `[图片：描述]` 进入聊天记录。
+ * 聊天里出现的非表情包图片交给识图模型（独立后端，见 src/llm/vision.ts）识别，结果以 `[图片：描述]` 进入聊天记录。
  * 与 stickers.ts 不同：描述只缓存在内存（进程重启即失效），图片不落盘。
  * 同一张图（按 file/url 去重）只识别一次；缓存的是 Promise，让并发请求共享同一结果；
  * 缓存上限 500 条，超限按插入顺序淘汰最旧的。
@@ -11,8 +11,8 @@ import { logger } from "../logger.js";
 import type { Segment } from "../napcat/types.js";
 import { cleanDescription, dataUrl, downloadImage, type Describe } from "./media.js";
 
-// 识图提示词：详细说清图里是什么，图上有文字则带上文字。
-const DESCRIBE_PROMPT = "这是聊天里有人发的一张图片。详细说清楚图里是什么；图上有文字就把所有文字写进来。只输出客观描述，禁止主观评价。";
+// 识图提示词：DeepSeek-OCR 官方推荐的「图像描述」模板（<image> 为图片占位 token）。
+const DESCRIBE_PROMPT = "<image>\nDescribe this image in detail. If there are any words on the picture, write them all in. Only objective descriptions are output. Subjective evaluations are prohibited. Return in Chinese.";
 // 内存缓存上限：图片描述只是临时上下文，进程重启即清空，500 条足够覆盖近期图片。
 const MAX_CACHE = 500;
 // 单条描述截断长度，避免超长文本挤占聊天记录。
