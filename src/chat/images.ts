@@ -12,7 +12,7 @@ import type { Segment } from "../napcat/types.js";
 import { cleanDescription, dataUrl, downloadImage, type Describe } from "./media.js";
 
 // 识图提示词：DeepSeek-OCR 官方推荐的「图像描述」模板（<image> 为图片占位 token）。
-const DESCRIBE_PROMPT = "<image>\nDescribe this image in detail. If there are any words on the picture, write them all in. Only objective descriptions are output. Subjective evaluations are prohibited. Return in Chinese.";
+const DESCRIBE_PROMPT = "<image>\nDescribe this image in detail. If there are any words on the picture, write them all in. Only objective descriptions are output. Subjective evaluations are prohibited.";
 // 内存缓存上限：图片描述只是临时上下文，进程重启即清空，500 条足够覆盖近期图片。
 const MAX_CACHE = 500;
 // 单条描述截断长度，避免超长文本挤占聊天记录。

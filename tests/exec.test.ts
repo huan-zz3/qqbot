@@ -16,6 +16,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 process.env.LOG_LEVEL = "silent";
+// 让 config.proxy.url 非空，以验证子进程确实拿到了注入的代理环境变量（必须在 import 前设置）。
+process.env.PROXY_URL = "http://127.0.0.1:7890";
 
 const { CronExecutor } = await import("../src/exec/cron-exec.js");
 type Deps = ConstructorParameters<typeof CronExecutor>[0];
@@ -56,4 +58,17 @@ test("a run is skipped while the previous one is still executing", async () => {
 
 test("an invalid cron expression throws at construction", () => {
   assert.throws(() => make([{ index: 1, cron: "not a cron", shell: "true" }]));
+});
+
+// 回归防线：子进程必须拿到注入的代理环境变量（bot 自身的 undici 代理不写 process.env，
+// 子进程若不显式注入就是「无代理」，出网命令会直连超时）。
+test("run injects proxy env vars into the child process", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "exec-"));
+  const out = join(dir, "proxy");
+  const command = { index: 1, cron: "0 0 * * *", shell: `printf %s "$http_proxy" > ${out}` };
+  const executor = make([command]);
+  await executor.run(command);
+  assert.equal(readFileSync(out, "utf8"), "http://127.0.0.1:7890");
+  executor.dispose();
+  rmSync(dir, { recursive: true, force: true });
 });

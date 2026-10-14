@@ -59,7 +59,7 @@ const MAX_BYTES = 3 * 1024 * 1024;
 // 归档文件名：与 index.json 同目录，独立存放淘汰后保留的描述。
 const ARCHIVE_FILE = "archive.json";
 // 识图提示词：DeepSeek-OCR 官方推荐的「图像描述」模板（<image> 为图片占位 token），并要求一句话输出。
-const DESCRIBE_PROMPT = "<image>\nDescribe this image in detail. Output in one sentence. Return in Chinese.";
+const DESCRIBE_PROMPT = "<image>\nDescribe this image in detail. Output in one sentence.";
 
 // 生成去重键：mface 优先 emoji_id（退回 key），图片用 file（退回 url）；
 // 两者都拿不到时返回 undefined，表示这张表情无法收藏。

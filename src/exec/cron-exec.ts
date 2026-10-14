@@ -15,6 +15,7 @@ import { exec } from "node:child_process";
 import type { CronJob } from "cron";
 
 import { logger } from "../logger.js";
+import { proxyEnv } from "../proxy.js";
 import { createCronJob } from "../schedule/scheduler.js";
 
 /** 一条定时命令：index 为原始编号（EXEC_<index>），仅用于日志/报错定位。 */
@@ -83,7 +84,10 @@ export class CronExecutor {
   /** 执行 shell 命令并收集结果；不抛出，把 exec 的错误归一成结构化结果。 */
   private spawn(shell: string): Promise<ExecResult> {
     return new Promise((resolve) => {
-      exec(shell, { timeout: this.deps.timeoutMs }, (error, stdout, stderr) => {
+      // 显式注入代理环境变量：bot 进程的代理是 undici dispatcher（不写 process.env），
+      // 子进程直接继承会是「无代理」环境，出网命令（如 git pull）会直连超时。
+      const env = { ...process.env, ...proxyEnv() };
+      exec(shell, { timeout: this.deps.timeoutMs, env }, (error, stdout, stderr) => {
         const message = error?.message ?? "";
         const code = error?.code;
         // 输出超过 exec 的 maxBuffer：子进程被杀，错误文案里含 maxBuffer。

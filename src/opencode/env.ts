@@ -12,9 +12,7 @@
  * failure”）。显式排除本机即可，不影响出网仍走代理。
  */
 import { config } from "../config.js";
-
-/** 永远不经过代理的本机地址。 */
-const LOCAL_HOSTS = ["127.0.0.1", "localhost", "::1"];
+import { proxyEnv } from "../proxy.js";
 
 /**
  * 只读加固：每个 opencode 子进程都注入这段配置，把「写/命令/联网」类工具直接摘掉。
@@ -41,18 +39,8 @@ const READONLY_CONFIG = JSON.stringify({
  * @returns 供 spawn 使用的环境变量对象。
  */
 export function childEnv(proxyUrl: string = config.proxy.url): NodeJS.ProcessEnv {
-  const existing = process.env.no_proxy ?? process.env.NO_PROXY ?? "";
-  const entries = new Set(existing.split(",").map((item) => item.trim()).filter(Boolean));
-  for (const host of LOCAL_HOSTS) entries.add(host);
-  const merged = [...entries].join(",");
-  const env: NodeJS.ProcessEnv = { ...process.env, no_proxy: merged, NO_PROXY: merged };
-  // 配了代理则显式注入（大小写都写，兼容只看其中一种的 HTTP 客户端）；留空则维持直连。
-  const proxy = proxyUrl.trim();
-  if (proxy) {
-    env.http_proxy = env.HTTP_PROXY = proxy;
-    env.https_proxy = env.HTTPS_PROXY = proxy;
-    env.all_proxy = env.ALL_PROXY = proxy;
-  }
+  // 代理与本机排除复用 proxyEnv（与 cron-exec 等其它子进程同一份逻辑）。
+  const env: NodeJS.ProcessEnv = { ...process.env, ...proxyEnv(proxyUrl) };
   // 只读加固：覆盖式注入，确保 opencode 子进程拿不到写/命令/联网类工具。
   env.OPENCODE_CONFIG_CONTENT = READONLY_CONFIG;
   return env;
