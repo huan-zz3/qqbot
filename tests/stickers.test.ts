@@ -5,7 +5,8 @@
  * - sniffMime：按文件头魔数识别 GIF/JPEG 等图片格式；
  * - StickerStore：首次见到表情时下载 + 识图并收藏、并发/重复出现去重、按 base64 重发、
  *   商城表情按 mface 原样重发、超出上限时淘汰最少用的并从磁盘删文件、
- *   索引持久化（index.json）与加载时清洗历史描述、候选列表按群友发送次数排序再打乱；
+ *   淘汰项转入归档后再次出现免识图（跨重启仍可复用）、归档按上限裁剪、mface 提升不下载、
+ *   索引持久化（index.json / archive.json）与加载时清洗历史描述、候选列表按群友发送次数排序再打乱；
  * - cleanDescription：去掉识图描述里「没有文字/图中无文字」这类废话。
  *
  * 注意：config.ts 在 import 时读取 process.env，先设环境变量再动态 import 被测模块。
@@ -36,10 +37,10 @@ globalThis.fetch = (async () => {
 const image = (file: string) => ({ type: "image", data: { file, url: `https://img.example/${file}`, sub_type: 1 } });
 
 // 建隔离的临时目录 + StickerStore：每个用例自己的收藏库，互不干扰；
-// describe 是识图桩（默认返回固定描述），max 用于测试淘汰上限。
-async function store(max = 300, describe = async () => "猫猫叹气") {
+// describe 是识图桩（默认返回固定描述），max 用于测试淘汰上限，archiveMax 测试归档上限。
+async function store(max = 300, describe = async () => "猫猫叹气", archiveMax = 2000) {
   const dir = await mkdtemp(join(tmpdir(), "qqbot-stickers-"));
-  const instance = new StickerStore(dir, describe, max);
+  const instance = new StickerStore(dir, describe, max, archiveMax);
   await instance.load();
   return { dir, instance };
 }
@@ -112,6 +113,71 @@ test("evicts the least used sticker and its file when full", async () => {
     ["image:a.gif", "image:c.gif"],
   );
   assert.equal((await readdir(dir)).filter((file) => file.endsWith(".gif")).length, 2);
+});
+
+// 归档：被淘汰的表情再次出现时复用归档描述、不再识图；活跃满了但分数够则提升回收藏。
+// describe 用计数桩，断言「重新出现」没有第二次识图。
+test("reuses an evicted sticker's archived description without re-describing", async () => {
+  let described = 0;
+  const { instance } = await store(1, async () => {
+    described++;
+    return "猫猫叹气";
+  });
+  await instance.observe(image("a.gif"));
+  assert.equal(described, 1);
+  await instance.observe(image("b.gif")); // 上限 1：a 被淘汰进归档
+  assert.equal(instance.size, 1);
+  assert.equal(instance.archiveSize, 1);
+  const baseline = described; // b 是新表情要识图，此后不应再增加
+  assert.equal(await instance.observe(image("a.gif")), "猫猫叹气"); // 命中归档
+  assert.equal(described, baseline); // 复用归档，未再识图
+});
+
+// 归档跨重启：flush 后新实例 load，归档里的描述仍可直接复用，识图桩设为抛错以证明未被调用。
+test("archived descriptions survive a reload without re-describing", async () => {
+  const { dir, instance } = await store(1, async () => "猫猫叹气");
+  await instance.observe(image("a.gif"));
+  await instance.observe(image("b.gif")); // a 进归档
+  await instance.flush();
+  const reloaded = new StickerStore(
+    dir,
+    async () => {
+      throw new Error("不该识图");
+    },
+    1,
+  );
+  await reloaded.load();
+  assert.equal(reloaded.archiveSize, 1);
+  assert.equal(await reloaded.observe(image("a.gif")), "猫猫叹气");
+});
+
+// 归档本身也有上限：超过 archiveMax 时按 lastSeen 淘汰最旧的，活跃收藏不受影响。
+test("caps the archive by dropping the oldest entries", async () => {
+  const { instance } = await store(1, async () => "猫猫叹气", 2);
+  for (const file of ["a.gif", "b.gif", "c.gif", "d.gif"]) await instance.observe(image(file));
+  assert.equal(instance.size, 1);
+  assert.equal(instance.archiveSize, 2);
+});
+
+// 商城表情提升：从当前段重建 mface 原字段，无需下载图片（断言 fetch 计数不增）。
+test("promotes an archived mface without downloading", async () => {
+  const { instance } = await store(1, async () => "猫猫叹气");
+  const face = (id: string) => ({
+    type: "mface",
+    data: { emoji_id: id, emoji_package_id: 7, key: "k", summary: "[嘻嘻]", url: `https://img.example/${id}.gif` },
+  });
+  await instance.observe(face("e1"));
+  await instance.observe(face("e2")); // e1 进归档
+  const before = downloads;
+  assert.equal(await instance.observe(face("e1")), "猫猫叹气");
+  assert.equal(downloads, before); // 提升 mface 不下载
+  const promoted = instance.list().find((sticker) => sticker.key === "mface:e1")!;
+  assert.deepEqual((await instance.toSegment(promoted)).data, {
+    emoji_id: "e1",
+    emoji_package_id: 7,
+    key: "k",
+    summary: "[嘻嘻]",
+  });
 });
 
 // 边界：识图返回空串代表这张图没有收藏价值，observe 返回 undefined 且不入库。

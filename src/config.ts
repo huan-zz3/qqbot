@@ -267,6 +267,8 @@ export const config = {
     dir: str("STICKERS_DIR", "data/stickers"),
     // 收藏上限，满了淘汰最少用的。
     max: num("STICKERS_MAX", 300),
+    // 淘汰后保留描述的归档上限，满了淘汰最旧的（归档无文件，可远大于收藏上限）。
+    archiveMax: num("STICKERS_ARCHIVE_MAX", 2000),
     // 随提示词给模型的候选表情数量（打乱顺序，避免越用越偏向某几张）。
     promptLimit: num("STICKERS_PROMPT_LIMIT", 40),
   },

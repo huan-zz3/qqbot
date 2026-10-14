@@ -137,6 +137,11 @@ async function main(): Promise<void> {
   }
 
   // 表情包库：从磁盘加载已收藏的表情与描述（写描述用 deepseek 识图）。
+  // 归档上限必须为正，否则归档裁剪逻辑会异常（不静默失效）。
+  if (config.stickers.enabled && !(config.stickers.archiveMax > 0)) {
+    logger.error(`STICKERS_ARCHIVE_MAX 必须为正数（当前 ${config.stickers.archiveMax}）`);
+    process.exit(1);
+  }
   let stickers: StickerStore | undefined;
   if (config.stickers.enabled) {
     stickers = new StickerStore(config.stickers.dir, describeSticker(describeImage));
@@ -334,7 +339,7 @@ async function main(): Promise<void> {
   const opencodeInput =
     [config.opencode.inputPrefix && "pre", config.opencode.inputSuffix && "suf"].filter(Boolean).join("+") || "off";
   logger.info(
-    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${materials ? `on(${config.files.dir},keep=${Math.round(config.files.keepMs / 3600000)}h)` : config.files.enabled ? "off(materialize)" : "off"} stickers=${stickers ? stickers.size : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${materials ? `on(${config.files.dir},keep=${Math.round(config.files.keepMs / 3600000)}h)` : config.files.enabled ? "off(materialize)" : "off"} stickers=${stickers ? `${stickers.size}(archive=${stickers.archiveSize})` : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();
