@@ -19,7 +19,7 @@
 
 - 像群友一样判断时机：新消息先攒一小批，交给 decider —— 一个通用的“判定接口”（本项目默认接 [Perplexity Decisions API](https://docs.perplexity.ai)，端点 / 密钥 / 模型都在 `.env` 里配）—— 给出“该不该接话”的概率。被 @ 或被回复只是降低门槛，“哈哈哈”之类的收尾照样可以不回。
 - 只用 deepseek-flash 说话：提示词只交代事实（QQ 不渲染 Markdown、每行是一条消息、可以选择不说），不规定长度语气，也不给示例句。
-- 表情包：自动收藏群友发的表情包，用识图模型（独立后端，SiliconFlow 的 DeepSeek-OCR）写描述；模型想发时自己挑。QQ 小黄脸按名字收发（`[doge]` 会发成真表情）。
+- 表情包：自动收藏群友发的表情包，用识图模型（独立后端，SiliconFlow 的 DeepSeek-OCR）写描述；模型想发时自己挑。识别与发送可分开开关（`STICKERS_RECOGNIZE_ENABLED`），积累够了可关掉识别、只读现有库继续发送。QQ 小黄脸按名字收发（`[doge]` 会发成真表情）。
 - 看得懂图片：普通图片也交给识图模型识别，以 `[图片：描述]` 出现在聊天记录里。
 - 连发多条，长了就合并转发：每行一条消息，按打字速度间隔发出；回复长到超过 5 行或 300 字时，第一条文本单独发出，从第二条起合并成一条转发，不刷屏。
 - 联网搜索：decider 觉得可能需要查资料时，把一个远程 MCP 搜索服务器（多引擎搜索 + 抓取网页正文）暴露的工具挂给模型，搜不搜、抓不抓由模型决定。
@@ -57,7 +57,7 @@ NapCat ──WS──> 收消息 ──防抖合并──> decider 判断 ──
 - Node.js ≥ 22、pnpm
 - 一个已登录的 NapCat（推荐 [NapCat-Docker](https://github.com/NapNeko/NapCat-Docker)）
 - [DeepSeek API key](https://platform.deepseek.com/)（回复模型）
-- [SiliconFlow API key](https://cloud.siliconflow.cn/)（图像识别，独立于回复模型；只开图片/表情包任一功能才需要）
+- [SiliconFlow API key](https://cloud.siliconflow.cn/)（图像识别，独立于回复模型；开图片识图、或表情包识别才需要，表情包只发送不识别时不需要）
 - [Perplexity API key](https://console.perplexity.ai)（decider，可选）
 
 ### 1. 在 NapCat 里开 WebSocket 服务端
@@ -201,7 +201,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `DEEPSEEK_TEMPERATURE` | 1.1 | 回复的采样温度；1.3 会冒出奇怪的外文标点和单词 |
 | `SEARCH_MAX_TOOL_ROUNDS` / `OPENCODE_MAX_TOOL_ROUNDS` | 3 / 3 | 联网搜索组、opencode 组各自独立的工具轮数上限；某组用满只撤该组并提示该工具不可用，两组都用满才不再挂工具并追加「纯文本作答」收尾指令 |
 | `REPLY_FORWARD_PARTS` / `REPLY_FORWARD_CHARS` | 5 / 300 | 回复超过这么多行或字就改发合并转发（第一条文本单独发，其余合并） |
-| `VISION_API_KEY` | | 图像识别（SiliconFlow DeepSeek-OCR）的密钥，与回复模型分开；只开图片 / 表情包任一功能时必填，否则启动报错退出 |
+| `VISION_API_KEY` | | 图像识别（SiliconFlow DeepSeek-OCR）的密钥，与回复模型分开；开图片识图、或表情包识别（`STICKERS_ENABLED` 且 `STICKERS_RECOGNIZE_ENABLED`）时必填，否则启动报错退出 |
 | `VISION_DETAIL` | high | 传给识图接口 `image_url` 的细节级别：`low` / `high` / `auto`，非法值启动报错退出 |
 | `VISION_TIMEOUT_MS` / `VISION_MAX_TOKENS` | 30000 / 512 | 识图请求超时（毫秒）与输出上限；须为正，且超时须小于媒体补全等待上限（`MEDIA_WAIT_MS`=35000），否则启动报错退出 |
 | `IMAGES_ENABLED` | true | 普通图片识图（图像识别后端写死为 SiliconFlow 的 `deepseek-ai/DeepSeek-OCR`，模型名不可配） |
@@ -211,6 +211,8 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `FILES_EXTRACT_MAX_BYTES` / `FILES_EXTRACT_MAX_ENTRIES` / `FILES_EXTRACT_MAX_FILE_BYTES` | 200MB / 1000 / 50MB | 单包解压后总字节、条目数、单文件字节上限 |
 | `FILES_KEEP_MS` / `FILES_STORE_MAX_BYTES` / `FILES_SWEEP_MS` / `FILES_TIMEOUT_MS` | 24h / 1GB / 1h / 120s | 解压目录保留时长、磁盘总预算（超出删最旧）、清理扫描间隔、单包下载超时；启用物料化时都必须为正，否则启动报错退出 |
 | `FILES_PROMPT` / `FILES_READ_PROMPT` | （内置说明） | 给模型的压缩包处理说明（执行逻辑：何时算成功 / 失败、失败要如实转告等）与「怎么读解压目录」说明；留空用内置默认。`FILES_READ_PROMPT` 仅在挂了 opencode 工具时追加（见 [`.env.example`](.env.example) 里的示例定义） |
+| `STICKERS_ENABLED` | true | 表情包总开关：关掉则整个表情包功能停用（不建库、不展示、不发送） |
+| `STICKERS_RECOGNIZE_ENABLED` | true | 是否识别并收藏新表情（下载 + 识图 + 入库，含把归档表情提升回活跃）；关闭后只读现有库，老表情照常展示与发送，新表情不下载不识图，适合「积累够了不想再轮换」 |
 | `STICKERS_MAX` | 300 | 表情包收藏（活跃）上限，满了淘汰最少用的 |
 | `STICKERS_ARCHIVE_MAX` | 2000 | 淘汰后保留描述的归档上限（归档无文件，可远大于收藏上限），满了淘汰最旧的 |
 | `MEMORY_LEARN_DELAY_MS` | 10000 | 记忆只在 bot 实际回复后整理（范围=触发该次回复的那批消息），回复后等这么久再整理；延迟窗内的多次回复合并为一次 |
@@ -220,7 +222,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 
 ## 表情包与记忆
 
-- 表情包：收藏表情和商城表情第一次出现时下载下来，识图模型写一句描述，存在 `data/stickers/`。聊天记录里显示为 `[表情包：描述]`；群友发得最多的 40 张打乱顺序后随系统提示词给模型（不按它自己用过的次数排，免得越用越偏向那几张），它单独一行写 `[表情包#编号]` 就会发出去。收藏超过上限时淘汰最少用的（只删图片文件），被淘汰的表情的**描述会转入归档**（`data/stickers/archive.json`）：之后它再出现时直接复用归档描述、**不会重新识图**（省 token），并在活跃收藏有空间或它的分数不低于活跃最低分时提升回收藏。
+- 表情包：收藏表情和商城表情第一次出现时下载下来，识图模型写一句描述，存在 `data/stickers/`。聊天记录里显示为 `[表情包：描述]`；群友发得最多的 40 张打乱顺序后随系统提示词给模型（不按它自己用过的次数排，免得越用越偏向那几张），它单独一行写 `[表情包#编号]` 就会发出去。收藏超过上限时淘汰最少用的（只删图片文件），被淘汰的表情的**描述会转入归档**（`data/stickers/archive.json`）：之后它再出现时直接复用归档描述、**不会重新识图**（省 token），并在活跃收藏有空间或它的分数不低于活跃最低分时提升回收藏。识别与发送分开开关：`STICKERS_RECOGNIZE_ENABLED=false` 时只读现有库（老表情照常展示与发送，新表情不下载不识图、归档也不提升），适合积累够了不再轮换。
 - 普通图片：同样识图，但只在内存里缓存描述，不保存图片。
 - QQ 小黄脸：收到的显示为 `[名称]`；模型写出已知名称时发成真表情。名称表 [`src/napcat/faces.ts`](src/napcat/faces.ts) 取自 QQ NT 客户端的 `default_config.json`。
 - 记忆：只在 bot 实际回复后整理，范围是触发这次回复的那批消息；延迟窗内的多次回复合并为一次，让 deepseek-flash 更新对每个发言者的记忆：只记长期有效的（身份、喜好、关系、重要经历），不记一次性的事和玩笑，也不记住址、学校、联系方式这类隐私。按 QQ 号存在 `data/memory.json`，群聊和私聊分开记。回复时带上聊天里出现的人、以及被 @ 的人的记忆，私聊学到的标注“私聊里告诉你的”。

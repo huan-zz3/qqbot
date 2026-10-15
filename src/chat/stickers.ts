@@ -13,6 +13,8 @@
  * 时提升回活跃收藏（image 重新下载文件；mface 从当前段重建原字段、无需下载）。
  * 约束：商城表情保存原始段字段，重发时用 mface 以保留 QQ 原生样式；普通图片以
  * base64 上传、sub_type=1 标记为动画表情；收藏失败不阻塞聊天，下次出现可重试。
+ * 识别开关（STICKERS_RECOGNIZE_ENABLED）：关闭后新表情不下载/不识图/不入库、归档也不提升，
+ * 只读现有库（老表情照常展示与发送），用于「积累够了就不再轮换新表情」。
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
@@ -88,12 +90,14 @@ export class StickerStore {
    * @param describe 识图函数（data URL → 一句描述）
    * @param maxStickers 活跃收藏上限，超出按 seen + used*2 淘汰
    * @param archiveMax 归档上限，超出按 lastSeen 淘汰最旧的
+   * @param recognize 识别开关：为假时新表情不下载/不识图/不入库，归档也不提升，只读现有库
    */
   constructor(
     private readonly dir: string,
     private readonly describe: Describe,
     private readonly maxStickers = config.stickers.max,
     private readonly archiveMax = config.stickers.archiveMax,
+    private readonly recognize = config.stickers.recognize,
   ) {}
 
   /** 启动时建目录并读取 index.json / archive.json；顺带清洗历史描述、恢复递增编号。 */
@@ -131,6 +135,7 @@ export class StickerStore {
   /**
    * 记录「见到这张表情」并返回其描述；首次见到时触发收藏（下载 + 识图）。
    * 已收藏过、后被淘汰的表情命中归档，直接复用归档描述、不再识图。
+   * 识别开关关闭时只读现有库：新表情不下载/不识图/不入库，归档也不提升。
    * @returns 描述文本；无法识别/收藏失败时为 undefined（消息照常处理，只是没有描述）
    */
   async observe(segment: Segment): Promise<string | undefined> {
@@ -147,18 +152,22 @@ export class StickerStore {
     }
     const archived = this.archive.get(key);
     if (archived) {
-      // 归档命中：绝不重新识图，只更新统计；按规则尝试提升回活跃收藏（并发时复用同一任务）。
+      // 归档命中：绝不重新识图，只更新统计；识别开启时按规则尝试提升回活跃收藏（并发时复用同一任务）。
       archived.seen++;
       archived.lastSeen = Date.now();
-      let task = this.inflight.get(key);
-      if (!task) {
-        task = this.promote(key, archived, segment).finally(() => this.inflight.delete(key));
-        this.inflight.set(key, task);
+      if (this.recognize) {
+        let task = this.inflight.get(key);
+        if (!task) {
+          task = this.promote(key, archived, segment).finally(() => this.inflight.delete(key));
+          this.inflight.set(key, task);
+        }
+        await task;
       }
-      await task;
       this.scheduleSave();
       return archived.description;
     }
+    // 识别关闭：新表情不下载/不识图/不入库，直接返回无描述（预期结果，不记失败）。
+    if (!this.recognize) return undefined;
     // 首次出现：复用进行中的任务；finally 清理保证失败后仍能重试
     let task = this.inflight.get(key);
     if (!task) {

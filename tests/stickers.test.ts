@@ -37,10 +37,11 @@ globalThis.fetch = (async () => {
 const image = (file: string) => ({ type: "image", data: { file, url: `https://img.example/${file}`, sub_type: 1 } });
 
 // 建隔离的临时目录 + StickerStore：每个用例自己的收藏库，互不干扰；
-// describe 是识图桩（默认返回固定描述），max 用于测试淘汰上限，archiveMax 测试归档上限。
-async function store(max = 300, describe = async () => "猫猫叹气", archiveMax = 2000) {
+// describe 是识图桩（默认返回固定描述），max 用于测试淘汰上限，archiveMax 测试归档上限，
+// recognize 控制识别开关（默认 true；传 false 验证「只读现有库」）。
+async function store(max = 300, describe = async () => "猫猫叹气", archiveMax = 2000, recognize = true) {
   const dir = await mkdtemp(join(tmpdir(), "qqbot-stickers-"));
-  const instance = new StickerStore(dir, describe, max, archiveMax);
+  const instance = new StickerStore(dir, describe, max, archiveMax, recognize);
   await instance.load();
   return { dir, instance };
 }
@@ -157,6 +158,56 @@ test("caps the archive by dropping the oldest entries", async () => {
   for (const file of ["a.gif", "b.gif", "c.gif", "d.gif"]) await instance.observe(image(file));
   assert.equal(instance.size, 1);
   assert.equal(instance.archiveSize, 2);
+});
+
+// 识别关闭：新表情不下载、不识图、不入库（describe 桩抛错，一旦被调用即失败）。
+test("recognition off does not collect new stickers", async () => {
+  downloads = 0;
+  const { instance } = await store(
+    300,
+    async () => {
+      throw new Error("不该识图");
+    },
+    2000,
+    false,
+  );
+  assert.equal(await instance.observe(image("new.gif")), undefined);
+  assert.equal(instance.size, 0);
+  assert.equal(downloads, 0);
+});
+
+// 识别关闭但库已存在：老表情仍复用描述、归档命中只读不提升（frozen 的识图桩抛错证明不重新识图）。
+test("recognition off serves the existing library without promoting", async () => {
+  let described = 0;
+  const { dir, instance } = await store(1, async () => {
+    described++;
+    return "猫猫叹气";
+  });
+  await instance.observe(image("a.gif"));
+  await instance.observe(image("b.gif")); // 上限 1：a 进归档
+  await instance.flush();
+  const baseline = described;
+
+  const frozen = new StickerStore(
+    dir,
+    async () => {
+      throw new Error("不该识图");
+    },
+    1,
+    2000,
+    false,
+  );
+  await frozen.load();
+  // 活跃表情：复用描述
+  assert.equal(await frozen.observe(image("b.gif")), "猫猫叹气");
+  // 归档命中：返回描述但不提升（活跃仍为 1、归档仍为 1）
+  assert.equal(await frozen.observe(image("a.gif")), "猫猫叹气");
+  assert.equal(frozen.size, 1);
+  assert.equal(frozen.archiveSize, 1);
+  // 新表情：不收藏
+  assert.equal(await frozen.observe(image("new.gif")), undefined);
+  assert.equal(frozen.size, 1);
+  assert.equal(described, baseline);
 });
 
 // 商城表情提升：从当前段重建 mface 原字段，无需下载图片（断言 fetch 计数不增）。

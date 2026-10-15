@@ -274,7 +274,11 @@ export const config = {
   },
   // 表情包收藏与识图描述。
   stickers: {
+    // 总开关：关掉则整个表情包功能停用（不建库、不展示、不发送）。
     enabled: bool("STICKERS_ENABLED", true),
+    // 识别/收藏开关：总开关开启时，决定是否下载+识图新表情并入库（含把归档表情提升回活跃）。
+    // 关掉后只读现有库：老表情照常展示与发送，新表情不下载、不识图，活跃集合冻结。
+    recognize: bool("STICKERS_RECOGNIZE_ENABLED", true),
     dir: str("STICKERS_DIR", "data/stickers"),
     // 收藏上限，满了淘汰最少用的。
     max: num("STICKERS_MAX", 300),
