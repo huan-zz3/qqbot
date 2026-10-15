@@ -15,6 +15,7 @@
  */
 import { config } from "../config.js";
 import { logger } from "../logger.js";
+import { dumpPrompt } from "../prompt-dump.js";
 
 /** 硬编码的模型名：全项目唯一使用的模型，不提供其它模型或降级路径。 */
 export const DEEPSEEK_MODEL = "deepseek-flash";
@@ -121,6 +122,9 @@ async function complete(
   if (tools.length > 0) body.tools = tools;
   if (json) body.response_format = { type: "json_object" };
   if (temperature !== undefined) body.temperature = temperature;
+
+  // 调试落盘：目录未配置时为空操作，失败不影响请求。
+  dumpPrompt("llm", body);
 
   // 去掉 baseUrl 末尾斜杠，避免拼出双斜杠路径。
   const response = await fetch(`${config.deepseek.baseUrl.replace(/\/+$/, "")}/chat/completions`, {

@@ -114,6 +114,11 @@ const opencodeArgs = list("OPENCODE_ARGS");
 export const config = {
   // 日志级别：debug/info/warn/error/silent。
   logLevel: str("LOG_LEVEL", "info"),
+  // 调试辅助：把实际送给 decider / 回复模型的请求体落盘成 JSON，便于核对提示词。
+  debug: {
+    // 落盘目录：非空则开启（每次请求一个文件），留空关闭。放 data/ 下可被 .gitignore 忽略。
+    promptDumpDir: str("PROMPT_DUMP_DIR"),
+  },
   // 网络代理：非空则所有 HTTP 出网走该 HTTP 代理，留空则直连。
   proxy: {
     url: str("PROXY_URL"),

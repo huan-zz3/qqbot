@@ -49,6 +49,7 @@
 ## 目录
 
 - `src/index.ts` 启动、依赖组装；`src/config.ts` 环境变量（`str`/`num`/`bool`/`list`/`textFile` 助手；`textFile` 供 `BOT_PERSONA_FILE` 读行为准则）。
+- `src/prompt-dump.ts` 调试落盘：`PROMPT_DUMP_DIR` 非空时，把送给 decider / 回复模型的完整请求体每次请求写一个 JSON 文件（文件名含东八区时间戳+序号+类型标签）。纯旁路：关闭时零开销，I/O 失败只记 warn，绝不影响请求。`complete()` 一处覆盖回复/记忆/learn-history，`decider/client.ts` 一处覆盖发言判定与群管理。
 - `src/napcat/` WS 客户端、OneBot 类型、消息段渲染、QQ 表情表。
 - `src/chat/gate.ts` decider 问题与阈值、无 decider 兜底、`ctx.force` 强制回复；`runtime.ts` 会话防抖/判断/回复/发送/触发记忆、`sinceBot` 累计计数。
 - `src/decider/questions.ts` 通用判定输入/问题类型与 noul 构造；`client.ts` 通用判定请求（POST state + questions，端点/密钥/模型来自 `config.decider`）。

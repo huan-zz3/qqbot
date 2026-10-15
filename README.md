@@ -217,8 +217,18 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `STICKERS_ARCHIVE_MAX` | 2000 | 淘汰后保留描述的归档上限（归档无文件，可远大于收藏上限），满了淘汰最旧的 |
 | `MEMORY_LEARN_DELAY_MS` | 10000 | 记忆只在 bot 实际回复后整理（范围=触发该次回复的那批消息），回复后等这么久再整理；延迟窗内的多次回复合并为一次 |
 | `PROXY_URL` | | 填 HTTP 代理地址（如 `http://127.0.0.1:7890`）则所有联网请求都走它；留空直连 |
+| `PROMPT_DUMP_DIR` | | 调试用：非空则把每次送给 decider / 回复模型的**完整请求体**落盘成 JSON（每次请求一个文件），便于核对实际提示词；留空关闭。见下方「查看实际 prompt」 |
 | `SCHEDULE_ENABLED` / `SCHEDULE_GROUPS` | false / | 定时群发：按 `SCHEDULE_CRON` 向这些群各发一条 `SCHEDULE_TEXT` |
 | `EXEC_ENABLED` | false | 定时执行本地 shell 命令（多条，只写日志；不受 `/启动` `/停止` 约束） |
+
+### 查看实际 prompt（调试）
+
+想看 decider 与回复模型**真正收到的请求体**，把 `PROMPT_DUMP_DIR` 设成一个目录（例如 `data/prompts`）再启动：
+
+- 每次向 decider、或向回复模型发起请求前，都会把完整请求体写成一个 JSON 文件，文件名形如 `<东八区时间戳>-<序号>-<decider|llm>.json`。按「时间戳 + 序号」可还原工具循环各轮（多次调用 `llm`）的先后顺序。
+- 覆盖范围：decider 侧含发言判定与群管理三问；`llm` 侧含回复生成（system + 聊天记录 + 各轮工具调用与工具定义）、记忆整理与 `pnpm learn-history`。
+- 目录不存在会自动创建；创建或写入失败只记一条 warn，**不影响请求正常发出**。目录建议放 `data/` 下（已被 `.gitignore` 忽略，含群友信息，不要公开）。
+- 关闭：把 `PROMPT_DUMP_DIR` 留空（默认）即可，关闭时零开销、不产生文件。文件不会自动清理，请自行管理目录大小。
 
 ## 表情包与记忆
 
@@ -317,6 +327,7 @@ src/
 ├── index.ts              启动、依赖组装
 ├── config.ts             环境变量
 ├── proxy.ts              网络代理（PROXY_URL）
+├── prompt-dump.ts        调试：把送给 decider / 回复模型的请求体落盘（PROMPT_DUMP_DIR）
 ├── napcat/               WS 客户端、OneBot 类型、消息段渲染、QQ 表情表
 ├── schedule/
 │   └── scheduler.ts      定时群发：按 cron 向指定群发固定文本（含共用的 createCronJob / 时区）

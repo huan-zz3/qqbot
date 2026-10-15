@@ -18,6 +18,7 @@
 import { config } from "../config.js";
 import { errorText } from "../errors.js";
 import { logger } from "../logger.js";
+import { dumpPrompt } from "../prompt-dump.js";
 import { maskKey, promote, uniqueKeys } from "./keys.js";
 import type { DeciderQuestions, DeciderState } from "./questions.js";
 
@@ -45,14 +46,17 @@ export function createDecider(): Decider {
     state: DeciderState,
     questions: DeciderQuestions,
   ): Promise<Record<string, number>> {
+    // 通用 decider 请求体：只有 model / state / questions 三个字段。
+    const body = { model, state, questions };
+    // 调试落盘：目录未配置时为空操作，失败不影响请求。
+    dumpPrompt("decider", body);
     const response = await fetch(apiUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
       },
-      // 通用 decider 请求体：只有 model / state / questions 三个字段。
-      body: JSON.stringify({ model, state, questions }),
+      body: JSON.stringify(body),
       // 请求级超时：超时中止请求并抛错，交给调用方兜底。
       signal: AbortSignal.timeout(timeoutMs),
     });
