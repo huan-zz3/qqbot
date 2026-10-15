@@ -8,9 +8,8 @@
  * - needs_search 严格大于 0.1 才建议挂搜索；无 decider 的兜底路径一律挂；
  * - 没有硬性冷却：bot 刚发过言也由 decider 依据 state 里的活跃度自行权衡；
  * - buildState 把 bot 活跃度与 bot 自身消息标记整理进 decider 输入；
- * - decider 报错/缺失时走 fallback 硬规则：私聊、被 @、被回复、被点名且非纯反应才回；
- * - ctx.force（累计群消息到阈值）时无视 decider 分数强制回复，来源标 rule、搜索建议不变；
- * - isBareReaction 对纯反应/收尾消息的识别。
+ * - decider 报错/缺失时走 fallback 硬规则：被 @、被回复、GATE_DIRECT_USERS 命中才回；
+ * - ctx.force（累计群消息到阈值）时无视 decider 分数强制回复，来源标 rule、搜索建议不变。
  *
  * 注意：阈值 env 必须在动态 import 之前设置（config.ts 在 import 时读取）。
  */
@@ -29,7 +28,7 @@ process.env.GATE_REPLY_TRUE_PROMPT = "add extra true guidance.";
 process.env.GATE_REPLY_FALSE_PROMPT = "add extra false guidance.";
 
 // 动态引入被测模块（env 已生效）。
-const { decide, buildState, buildQuestions, isBareReaction } = await import("../src/chat/gate.js");
+const { decide, buildState, buildQuestions } = await import("../src/chat/gate.js");
 // 从 decide() 的参数类型取出 GateContext 与其消息元素 ChatRecord 类型。
 type GateContext = Parameters<typeof decide>[0];
 type ChatRecord = GateContext["pending"][number];
@@ -207,13 +206,15 @@ test("bot activity is visible to decider", () => {
 });
 
 /**
- * decider 报错或缺失时的兜底硬规则：
- * 只有私聊、被 @、被回复、被点名算信号，且整批不能全是纯反应消息。
- * - 群聊普通消息（无信号）→ 不回；mentionsBot → 回；私聊 → 回；
+ * decider 报错或缺失时的兜底硬规则：只认直接指向 bot 的信号（被 @、被回复、
+ * GATE_DIRECT_USERS 命中），正文点名与私聊都不再触发，也不再豁免纯反应消息。
+ * - 群聊普通消息（无信号）→ 不回；
+ * - 正文点名（mentionsBot）→ 不回；
+ * - 私聊 → 不回；
  * - decider 本身报错时决定来源标为 fallback；
- * - 「@小猫 帮我看看这个报错」有实义内容 → 回；
- * - 「@小猫 哈哈哈哈」是纯反应 → 不回（@ 不强制）；
- * - 私聊里的「好的谢谢」是收尾话 → 也不回。
+ * - 「@小猫 帮我看看这个报错」→ 回；
+ * - 「@小猫 哈哈哈哈」纯反应 → 也回（@ 即回，不再看内容）；
+ * - 回复了 bot 的消息 → 回。
  */
 test("falls back to hard rules when decider fails or is missing", async () => {
   // 模拟 decider 调用抛错。
@@ -222,36 +223,22 @@ test("falls back to hard rules when decider fails or is missing", async () => {
   };
   // 群聊普通消息，无任何信号 → 不回复。
   assert.equal((await decide(context(), failing)).reply, false);
-  // mentionsBot（点名）算信号 → 回复。
-  assert.equal((await decide(context({ pending: [record({ mentionsBot: true })] }), failing)).reply, true);
-  // 私聊本身算信号 → 回复。
-  assert.equal((await decide(context({ scope: "private" }), undefined)).reply, true);
+  // mentionsBot（正文点名）不再算信号 → 不回复。
+  assert.equal((await decide(context({ pending: [record({ mentionsBot: true })] }), failing)).reply, false);
+  // 私聊本身不再算信号 → 不回复。
+  assert.equal((await decide(context({ scope: "private" }), undefined)).reply, false);
   // decider 报错走兜底，来源为 fallback。
   assert.equal((await decide(context(), undefined)).source, "fallback");
   // 构造 @ 了 bot 的单条消息上下文。
   const at = (text: string) => context({ pending: [record({ atBot: true, text })] });
   // @ + 有实际内容 → 回复。
   assert.equal((await decide(at("@小猫 帮我看看这个报错"), undefined)).reply, true);
-  // @ + 纯反应 → 不回复。
-  assert.equal((await decide(at("@小猫 哈哈哈哈"), undefined)).reply, false);
-  // 私聊但内容是收尾话「好的谢谢」→ 不回复。
+  // @ + 纯反应 → 也回复（@ 即回，不再豁免纯反应）。
+  assert.equal((await decide(at("@小猫 哈哈哈哈"), undefined)).reply, true);
+  // 回复了 bot 的消息 → 回复。
+  assert.equal((await decide(context({ pending: [record({ replyToBot: true, text: "说下这个" })] }), undefined)).reply, true);
+  // 私聊但内容是收尾话「好的谢谢」→ 不回复（因为私聊无信号）。
   assert.equal((await decide(context({ scope: "private", pending: [record({ text: "好的谢谢" })] }), undefined)).reply, false);
-});
-
-/**
- * isBareReaction：先去掉 @xxx 与空白/标点，剩余部分整串由
- * 「哈哈/草/6/嗯/好的/ok/谢谢/表情包名/问号串」等纯反应片段组成才算 true。
- * 反向：句子带实义内容（如「哈哈哈这个好笑在哪」）不算纯反应。
- */
-test("bare reactions and closings are recognized", () => {
-  // 正向：整串（去掉 @ 与标点后）都是纯反应。
-  for (const text of ["哈哈哈", "@小猫 草", "666", "好的！", "嗯嗯", "ok", "谢谢~", "[表情包]", "？？"]) {
-    assert.equal(isBareReaction(text), true, text);
-  }
-  // 反向：含实义内容，不是纯反应。
-  for (const text of ["哈哈哈这个好笑在哪", "好的，那明天几点", "6点见", "为什么"]) {
-    assert.equal(isBareReaction(text), false, text);
-  }
 });
 
 /**

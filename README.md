@@ -17,7 +17,7 @@
 
 ## 亮点
 
-- 像群友一样判断时机：新消息先攒一小批，交给 decider —— 一个通用的“判定接口”（本项目默认接 [Perplexity Decisions API](https://docs.perplexity.ai)，端点 / 密钥 / 模型都在 `.env` 里配）—— 给出“该不该接话”的概率。被 @ 或被回复只是降低门槛，“哈哈哈”之类的收尾照样可以不回。
+- 像群友一样判断时机：新消息先攒一小批，交给 decider —— 一个通用的“判定接口”（本项目默认接 [Perplexity Decisions API](https://docs.perplexity.ai)，端点 / 密钥 / 模型都在 `.env` 里配）—— 给出“该不该接话”的概率。decider 可用时，被 @ 或被回复只是降低门槛，“哈哈哈”之类的收尾照样可以不回。
 - 只用 deepseek-flash 说话：提示词只交代事实（QQ 不渲染 Markdown、每行是一条消息、可以选择不说），不规定长度语气，也不给示例句。
 - 表情包：自动收藏群友发的表情包，用识图模型（独立后端，SiliconFlow 的 DeepSeek-OCR）写描述；模型想发时自己挑。识别与发送可分开开关（`STICKERS_RECOGNIZE_ENABLED`），积累够了可关掉识别、只读现有库继续发送。QQ 小黄脸按名字收发（`[doge]` 会发成真表情）。
 - 看得懂图片：普通图片也交给识图模型识别，以 `[图片：描述]` 出现在聊天记录里。
@@ -46,7 +46,7 @@ NapCat ──WS──> 收消息 ──防抖合并──> decider 判断 ──
 | `addressed` | 是不是在跟机器人说话，记录在日志里便于调参 |
 | `needs_search` | 高于 0.1 就给模型挂上 MCP 搜索工具（前提是 MCP 服务器可用） |
 
-机器人最近 5 分钟发了多少言、距上次发言多久，也一起放进 decider 的输入里，让它自己权衡别刷屏，代码里没有硬性冷却。decider 的输入不含人设（`state.bot` 只有名字与别名）。`should_reply` 的正文与 true/false 判定标准**完全取自** `GATE_REPLY_QUESTION_PROMPT` / `GATE_REPLY_TRUE_PROMPT` / `GATE_REPLY_FALSE_PROMPT`（代码不拼接任何内置文案；decider 可用时三项必配，缺任一启动即退出）。decider 不可用时退化为：私聊、被 @、被回复、被点名才回复，纯反应消息不回。
+机器人最近 5 分钟发了多少言、距上次发言多久，也一起放进 decider 的输入里，让它自己权衡别刷屏，代码里没有硬性冷却。decider 的输入不含人设（`state.bot` 只有名字与别名）。`should_reply` 的正文与 true/false 判定标准**完全取自** `GATE_REPLY_QUESTION_PROMPT` / `GATE_REPLY_TRUE_PROMPT` / `GATE_REPLY_FALSE_PROMPT`（代码不拼接任何内置文案；decider 可用时三项必配，缺任一启动即退出）。decider 不可用（或调用失败）时退化为规则兜底：只认直接指向机器人的信号——被 @、被回复、`GATE_DIRECT_USERS` 命中才回复；正文点名、私聊、纯反应消息都不再触发。想完全不用 decider，设 `DECIDER_ENABLED=false` 即可（显式开关）；把 `DECIDER_API_URL` / `DECIDER_API_KEY` / `DECIDER_MODEL` 任一留空也会停用（缺任一项即停用）。
 
 可选地，对 `GATE_FORCE_REPLY_GROUPS` 里指定的群，各自累计「自机器人上次发言以来收到的群消息数」；达到 `GATE_FORCE_REPLY_MESSAGES` 时，该群下一批判定**强制回复一次**（跳过 `should_reply` 阈值，搜索建议仍照常由 decider 给出），随后该群计数清零。机器人自身在群里发言、强制判定作出、或 `/停止` 时都会清零。私聊与未列出的群不受影响。
 
@@ -187,6 +187,7 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `GATE_FORCE_REPLY_ENABLED` | false | 启用「累计群消息强制回复」：指定群各自累计未回复的群消息，达到条数后下一次判断强制回复一次（跳过回复阈值，搜索建议照常来自 decider） |
 | `GATE_FORCE_REPLY_GROUPS` | | 生效的群号，逗号分隔；各群独立计数与清零。必须都在 `BOT_GROUPS` 内，启用时不能为空，否则启动报错退出 |
 | `GATE_FORCE_REPLY_MESSAGES` | 20 | 触发条数；启用时必须为正，否则启动报错退出 |
+| `DECIDER_ENABLED` | true | decider 总开关；设为 `false` 时即便端点/密钥/模型都配齐也不启用 decider，强制走规则兜底（只在被 @ / 被回复 / `GATE_DIRECT_USERS` 命中时发言），启动记一条 info 日志 |
 | `DECIDER_API_URL` / `DECIDER_MODEL` / `DECIDER_API_KEY` | Perplexity Decisions | 通用判定接口的端点 / 模型 / 密钥；`DECIDER_API_URL` 为空即停用 decider，退回规则兜底。`DECIDER_API_KEY` 可配多个（逗号/空格分隔），共用同一端点与模型：按顺序为优先级，某个失败就换下一个，成功者提升为最高优先级（仅进程内存，重启回到配置顺序） |
 | `OPENCODE_ENABLED` / `OPENCODE_CWD` | false / | 启用只读 OpenCode；`CWD` 是可访问的主仓库绝对路径（短名固定 `default`） |
 | `OPENCODE_DIRS` | | 追加的可访问仓库，每项 `短名=绝对路径`，逗号/空格分隔（路径不能含空格/逗号）；调用时模型用短名选择 |

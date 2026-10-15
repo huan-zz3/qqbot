@@ -194,6 +194,8 @@ export const config = {
   },
   // 通用 decider 判定服务：决定该不该发言、要不要挂联网搜索（端点/密钥/模型全部来自 .env，代码无 provider 默认值）。
   decider: {
+    // 总开关：false 时即便 apiUrl/密钥/模型都配齐也不启用 decider，强制走规则兜底（见 index.ts）。默认 true。
+    enabled: bool("DECIDER_ENABLED", true),
     // 判定端点完整 URL；空则未配置。多密钥共用同一端点与模型。
     apiUrl: str("DECIDER_API_URL"),
     // 判定服务密钥；可配多个（逗号/空白分隔，顺序即优先级），空数组即未配置。

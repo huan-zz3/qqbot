@@ -18,7 +18,7 @@ import { Materials } from "./chat/materials.js";
 import { MemoryStore } from "./chat/memory.js";
 import { PowerSwitch } from "./chat/power.js";
 import { StickerStore, describeSticker } from "./chat/stickers.js";
-import { createDecider } from "./decider/client.js";
+import { createDecider, type Decider } from "./decider/client.js";
 import { CronExecutor } from "./exec/cron-exec.js";
 import { DEEPSEEK_MODEL, completeJson } from "./llm/deepseek.js";
 import { VISION_MODEL, describeImage } from "./llm/vision.js";
@@ -71,17 +71,25 @@ async function main(): Promise<void> {
     }
   }
 
-  // decider 是可选组件：apiUrl/apiKey/model 三项都配齐才创建，否则为 undefined，后续 gate 走无 decider 的兜底路径。
-  // 缺哪项就在告警里点名，绝不静默停用。
-  const missingDecider = [
-    !config.decider.apiUrl && "DECIDER_API_URL",
-    config.decider.apiKeys.length === 0 && "DECIDER_API_KEY",
-    !config.decider.model && "DECIDER_MODEL",
-  ]
-    .filter(Boolean)
-    .join("/");
-  const decider = missingDecider ? undefined : createDecider();
-  if (missingDecider) logger.warn(`未配置 ${missingDecider}：decider 不可用，只在私聊、@、回复、点名时发言`);
+  // decider 是可选组件：显式开关关闭、或 apiUrl/apiKey/model 缺任一项，都为 undefined，后续 gate 走规则兜底路径。
+  // 两种停用原因分别记日志，绝不静默停用。
+  let decider: Decider | undefined;
+  if (!config.decider.enabled) {
+    logger.info("DECIDER_ENABLED=false：decider 已手动停用，走规则兜底（只在被 @ / 被回复 / GATE_DIRECT_USERS 命中时发言）");
+  } else {
+    const missingDecider = [
+      !config.decider.apiUrl && "DECIDER_API_URL",
+      config.decider.apiKeys.length === 0 && "DECIDER_API_KEY",
+      !config.decider.model && "DECIDER_MODEL",
+    ]
+      .filter(Boolean)
+      .join("/");
+    if (missingDecider) {
+      logger.warn(`未配置 ${missingDecider}：decider 不可用，走规则兜底（只在被 @ / 被回复 / GATE_DIRECT_USERS 命中时发言）`);
+    } else {
+      decider = createDecider();
+    }
+  }
 
   // decider 可用时，should_reply 的正文 / true / false 完全取自 GATE_REPLY_*，缺任一即退出：
   // 代码已无内置文案，空值会让判定失去依据、且不会自愈，必须在启动时暴露而非静默。

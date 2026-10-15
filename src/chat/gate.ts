@@ -12,8 +12,8 @@
  * - needs_search：高于 config.gate.searchThreshold（默认 0.1）就建议挂联网搜索工具，
  *   挂不挂得上还要看凭证是否可用（runtime.ts），真搜不搜由模型自己决定。
  *
- * 兜底路径：decider 不可用或调用报错时走 fallback——只有私聊、被 @、被回复、被点名算信号，
- * 纯反应消息（isBareReaction）不回复；搜索则一律挂上，交给模型判断。
+ * 兜底路径：decider 不可用或调用报错时走 fallback——只认直接指向 bot 的信号（被 @、被回复、
+ * GATE_DIRECT_USERS 命中），正文点名、私聊、纯反应均不触发；搜索则一律挂上，交给模型判断。
  * GATE_DIRECT_USERS 名单里的 QQ 被 @/被回复也视同 bot 自己（direct），两条路径一致生效。
  *
  * 强制路径：runtime 在某个群累计的未回复消息达到 GATE_FORCE_REPLY_MESSAGES 时，通过 ctx.force
@@ -123,19 +123,6 @@ export function buildQuestions(botName: string): DeciderQuestions {
   };
 }
 
-// 仅在没有 decider 的兜底路径使用：这些是收尾话和纯反应，不需要接话。
-const BARE_REACTION =
-  /^(?:[哈嘿呵嘻hH]+|草+|6+|[嗯恩哦噢喔啊]+|好+的?|好吧|行|ok|收到|懂了|明白了?|谢谢|谢了|多谢|感谢|thx|thanks|拜拜|晚安|[?？!！]+|\[[^\]]+\])+$/i;
-
-/**
- * 是否是纯反应消息（如「哈哈哈」「6」「好的」「[doge]」）。
- * 先去掉 @xxx 与空白/标点再匹配；去空后为空的也算。
- */
-export function isBareReaction(text: string): boolean {
-  const core = text.replace(/@\S+/g, "").replace(/[\s,，.。~～…、]+/g, "");
-  return core === "" || BARE_REACTION.test(core);
-}
-
 /**
  * 本条消息是否「直接指向」bot：被 @ 或被回复。GATE_DIRECT_USERS 名单里的 QQ 被 @ 或被回复时
  * 视同 bot 自己。decide 的阈值与 runtime 的防抖时长共用此判定，语义保持一致。
@@ -175,7 +162,6 @@ export async function decide(ctx: GateContext, decider: Decider | undefined): Pr
 async function evaluate(ctx: GateContext, decider: Decider | undefined): Promise<GateDecision> {
   // @ 和回复只是降低门槛；最终仍由 decider 结合机器人近期活跃度判断。
   const direct = ctx.pending.some(isDirect);
-  const mentioned = ctx.pending.some((record) => record.mentionsBot);
 
   if (decider) {
     try {
@@ -200,18 +186,16 @@ async function evaluate(ctx: GateContext, decider: Decider | undefined): Promise
         scores: { reply, addressed, search, threshold },
       };
     } catch (error) {
-      return fallback(ctx, direct, mentioned, `decider error: ${(error as Error).message}`);
+      return fallback(direct, `decider error: ${(error as Error).message}`);
     }
   }
-  return fallback(ctx, direct, mentioned, "no decider");
+  return fallback(direct, "no decider");
 }
 
 /**
- * 规则兜底：没有 decider 时只认明确信号（私聊、被 @、被回复、被点名）；
- * 整批全是纯反应消息时不回复。搜索一律挂上，交给模型判断。
+ * 规则兜底：没有 decider 时只认直接指向 bot 的信号（被 @、被回复、GATE_DIRECT_USERS 命中）。
+ * 搜索一律挂上，交给模型判断。
  */
-function fallback(ctx: GateContext, direct: boolean, mentioned: boolean, why: string): GateDecision {
-  const signal = direct || mentioned || ctx.scope === "private";
-  const reply = signal && !ctx.pending.every((record) => isBareReaction(record.text));
-  return { reply, search: true, reason: why, source: "fallback" };
+function fallback(direct: boolean, why: string): GateDecision {
+  return { reply: direct, search: true, reason: why, source: "fallback" };
 }
