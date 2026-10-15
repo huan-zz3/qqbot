@@ -6,8 +6,8 @@
  * - should_reply：概率达到阈值才发言。阈值分档：被 @/被回复用 directThreshold（默认 0.45），
  *   否则群聊用 groupThreshold（0.6）、私聊用 privateThreshold（0.35）；GATE_DIRECT_USERS 名单里的
  *   QQ 被 @ 或被回复时视同 bot 自己，同样归入 direct（见 isDirect）。
- *   GATE_REPLY_QUESTION_PROMPT / GATE_REPLY_TRUE_PROMPT / GATE_REPLY_FALSE_PROMPT 三项分别
- *   **追加**到该题的正文 / true / false 之后（留空不追加），用于说明「什么情况下该回复」；
+ *   GATE_REPLY_QUESTION_PROMPT / GATE_REPLY_TRUE_PROMPT / GATE_REPLY_FALSE_PROMPT 三项分别是
+ *   should_reply 正文 / true / false 的**唯一来源**（代码不再拼接内置文案），用于说明「什么情况下该回复」；
  * - addressed：是不是在跟机器人说话，只记进日志便于调参，不参与判定；
  * - needs_search：高于 config.gate.searchThreshold（默认 0.1）就建议挂联网搜索工具，
  *   挂不挂得上还要看凭证是否可用（runtime.ts），真搜不搜由模型自己决定。
@@ -38,7 +38,6 @@ export type GateContext = {
   sessionLabel: string; // 会话显示名（群名/对方昵称）
   botName: string; // 机器人名字
   aliases: string[]; // 别名列表
-  persona: string; // 人设，放进 state 供 decider 理解说话风格
   earlier: ChatRecord[]; // 本批之前的上下文消息
   pending: ChatRecord[]; // 本批新消息（判断的对象）
   presence: Presence; // 最近窗口内的活跃度统计
@@ -98,7 +97,7 @@ export function buildState(ctx: GateContext): DeciderState {
   const sinceBot = ctx.presence.lastBotAt === undefined ? null : Math.round((ctx.now - ctx.presence.lastBotAt) / 1000);
   return {
     chat: ctx.scope === "group" ? `QQ group "${ctx.sessionLabel}"` : `QQ private chat with ${ctx.sessionLabel}`,
-    bot: { name: ctx.botName, aliases: ctx.aliases, persona: ctx.persona },
+    bot: { name: ctx.botName, aliases: ctx.aliases },
     // 机器人最近窗口（默认 5 分钟，GATE_PRESENCE_WINDOW_MS）内的活跃度：让它自己权衡会不会刷屏，代码不做硬性冷却。
     bot_activity: {
       bot_messages_last_5min: ctx.presence.bot,
@@ -110,31 +109,15 @@ export function buildState(ctx: GateContext): DeciderState {
   };
 }
 
-/** 把追加提示词接到基础文案之后，用换行分隔；追加文案为空（未配置）时原样返回基础文案。 */
-function appendPrompt(base: string, extra: string): string {
-  return extra ? `${base}\n${extra}` : base;
-}
-
-/** 构造 decider 的三个是非题；每题可用 true/false 两面描述判定标准。 */
+/**
+ * 构造 decider 的三个是非题。should_reply 的正文 / true / false 只取 env 配置
+ * （config.gate.replyPrompt），代码不含内置文案；非空由 index.ts 启动时保证。
+ * addressed 与 needs_search 为通用英文文案，不参与 env 覆盖。
+ */
 export function buildQuestions(botName: string): DeciderQuestions {
   const { question, true: whenTrue, false: whenFalse } = config.gate.replyPrompt;
   return {
-    should_reply: noul(
-      appendPrompt(
-        `Should ${botName}, a member of this QQ chat, send a message now in response to new_messages?`,
-        question,
-      ),
-      {
-        true: appendPrompt(
-          `new_messages call for a response from ${botName}, or ${botName} has something worth adding. Being @mentioned or replied to (at_bot, replies_to_bot) makes this more likely.`,
-          whenTrue,
-        ),
-        false: appendPrompt(
-          `new_messages do not need anything from ${botName}: the exchange is between others, it is winding down, or a message from ${botName} would add nothing.`,
-          whenFalse,
-        ),
-      },
-    ),
+    should_reply: noul(question, { true: whenTrue, false: whenFalse }),
     addressed: noul(`new_messages are directed at ${botName} and expect it to respond.`),
     needs_search: noul(`A good reply to new_messages depends on up-to-date or specific facts that should be looked up on the web.`),
   };

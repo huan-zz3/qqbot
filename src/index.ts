@@ -83,6 +83,22 @@ async function main(): Promise<void> {
   const decider = missingDecider ? undefined : createDecider();
   if (missingDecider) logger.warn(`未配置 ${missingDecider}：decider 不可用，只在私聊、@、回复、点名时发言`);
 
+  // decider 可用时，should_reply 的正文 / true / false 完全取自 GATE_REPLY_*，缺任一即退出：
+  // 代码已无内置文案，空值会让判定失去依据、且不会自愈，必须在启动时暴露而非静默。
+  if (decider) {
+    const missingReplyPrompts = [
+      !config.gate.replyPrompt.question && "GATE_REPLY_QUESTION_PROMPT",
+      !config.gate.replyPrompt.true && "GATE_REPLY_TRUE_PROMPT",
+      !config.gate.replyPrompt.false && "GATE_REPLY_FALSE_PROMPT",
+    ]
+      .filter(Boolean)
+      .join("/");
+    if (missingReplyPrompts) {
+      logger.error(`decider 可用但未配置 ${missingReplyPrompts}：should_reply 文案无来源，拒绝启动`);
+      process.exit(1);
+    }
+  }
+
   // 联网搜索：启动时连一次远程 MCP 服务器并拉取工具清单；失败只告警不阻止启动，搜索停用。
   let search: McpSearch | undefined;
   if (config.search.enabled) {

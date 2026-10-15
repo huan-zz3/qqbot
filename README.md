@@ -46,7 +46,7 @@ NapCat ──WS──> 收消息 ──防抖合并──> decider 判断 ──
 | `addressed` | 是不是在跟机器人说话，记录在日志里便于调参 |
 | `needs_search` | 高于 0.1 就给模型挂上 MCP 搜索工具（前提是 MCP 服务器可用） |
 
-机器人最近 5 分钟发了多少言、距上次发言多久，也一起放进 decider 的输入里，让它自己权衡别刷屏，代码里没有硬性冷却。`should_reply` 的正文与 true/false 判定标准都支持追加自定义提示词（`GATE_REPLY_QUESTION_PROMPT` / `GATE_REPLY_TRUE_PROMPT` / `GATE_REPLY_FALSE_PROMPT`，留空不追加），用来补充「什么情况下该回复」。decider 不可用时退化为：私聊、被 @、被回复、被点名才回复，纯反应消息不回。
+机器人最近 5 分钟发了多少言、距上次发言多久，也一起放进 decider 的输入里，让它自己权衡别刷屏，代码里没有硬性冷却。decider 的输入不含人设（`state.bot` 只有名字与别名）。`should_reply` 的正文与 true/false 判定标准**完全取自** `GATE_REPLY_QUESTION_PROMPT` / `GATE_REPLY_TRUE_PROMPT` / `GATE_REPLY_FALSE_PROMPT`（代码不拼接任何内置文案；decider 可用时三项必配，缺任一启动即退出）。decider 不可用时退化为：私聊、被 @、被回复、被点名才回复，纯反应消息不回。
 
 可选地，对 `GATE_FORCE_REPLY_GROUPS` 里指定的群，各自累计「自机器人上次发言以来收到的群消息数」；达到 `GATE_FORCE_REPLY_MESSAGES` 时，该群下一批判定**强制回复一次**（跳过 `should_reply` 阈值，搜索建议仍照常由 decider 给出），随后该群计数清零。机器人自身在群里发言、强制判定作出、或 `/停止` 时都会清零。私聊与未列出的群不受影响。
 
@@ -182,8 +182,8 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `DECIDER_CONTEXT_MESSAGES` | 40 | 给 decider 看的**共享**最近消息条数（与模型窗口分开配置） |
 | `DECIDER_USER_CONTEXT_MESSAGES` | 0 | decider 窗口对本批每个发言群友**各自额外保证**纳入的最近消息条数（叠加在共享窗口之上，语义同 `HISTORY_USER_CONTEXT_MESSAGES`）；默认 0 时退化为只看共享窗口、与拆分前一致。decider 窗口同样会补齐区间内 **bot 自己**的消息 |
 | `GATE_SEARCH_THRESHOLD` | 0.1 | `needs_search` 高于它就挂上搜索工具 |
-| `GATE_REPLY_QUESTION_PROMPT` | | 追加到 `should_reply` 问题正文之后的自定义提示词 |
-| `GATE_REPLY_TRUE_PROMPT` / `GATE_REPLY_FALSE_PROMPT` | | 分别追加到 `should_reply` 的 true / false 判定标准之后 |
+| `GATE_REPLY_QUESTION_PROMPT` | | `should_reply` 问题正文（唯一来源，代码不再拼接内置文案） |
+| `GATE_REPLY_TRUE_PROMPT` / `GATE_REPLY_FALSE_PROMPT` | | `should_reply` 的 true / false 判定标准（唯一来源）。decider 可用时三项缺任一，启动即报错退出 |
 | `GATE_FORCE_REPLY_ENABLED` | false | 启用「累计群消息强制回复」：指定群各自累计未回复的群消息，达到条数后下一次判断强制回复一次（跳过回复阈值，搜索建议照常来自 decider） |
 | `GATE_FORCE_REPLY_GROUPS` | | 生效的群号，逗号分隔；各群独立计数与清零。必须都在 `BOT_GROUPS` 内，启用时不能为空，否则启动报错退出 |
 | `GATE_FORCE_REPLY_MESSAGES` | 20 | 触发条数；启用时必须为正，否则启动报错退出 |

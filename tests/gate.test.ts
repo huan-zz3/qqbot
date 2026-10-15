@@ -23,7 +23,7 @@ process.env.GATE_PRIVATE_THRESHOLD = "0.35";
 process.env.GATE_DIRECT_THRESHOLD = "0.3";
 process.env.GATE_DIRECT_USERS = "10001,10002";
 process.env.GATE_SEARCH_THRESHOLD = "0.1";
-// 回复判定追加提示词：三项分别落到 should_reply 的正文 / true / false。
+// should_reply 的正文 / true / false 完全取自这三项 env（代码无内置文案）。
 process.env.GATE_REPLY_QUESTION_PROMPT = "reply whenever it feels natural.";
 process.env.GATE_REPLY_TRUE_PROMPT = "add extra true guidance.";
 process.env.GATE_REPLY_FALSE_PROMPT = "add extra false guidance.";
@@ -61,7 +61,6 @@ function context(overrides: Partial<GateContext> = {}): GateContext {
     sessionLabel: "测试群",
     botName: "小猫",
     aliases: [],
-    persona: "普通网友",
     earlier: [],
     pending: [record()],
     presence: { bot: 0, total: 1 },
@@ -257,7 +256,7 @@ test("bare reactions and closings are recognized", () => {
 
 /**
  * buildState 的消息条目：bot 自己的消息 from 标成「名字 (the bot itself)」，
- * 新消息带 at_bot / replies_to_bot / mentions_bot_name 等布尔标记。
+ * 新消息带 at_bot / replies_to_bot / mentions_bot_name 等布尔标记；state.bot 只含 name/aliases。
  */
 test("state marks the bot's own messages and flags", () => {
   // earlier 放一条 bot 消息，pending 放一条 @ 了 bot 的消息。
@@ -268,26 +267,28 @@ test("state marks the bot's own messages and flags", () => {
   assert.equal(state.earlier_messages[0].from, "小猫 (the bot itself)");
   // 新消息带 at_bot 标记。
   assert.equal(state.new_messages[0].at_bot, true);
+  // state.bot 不再带 persona，只有身份与别名。
+  assert.deepEqual(Object.keys(state.bot).sort(), ["aliases", "name"]);
 });
 
 /**
- * GATE_REPLY_QUESTION_PROMPT / _TRUE_PROMPT / _FALSE_PROMPT 三个提示词分别**追加**到
- * should_reply 的正文 / criteria.true / criteria.false 之后：基础文案原样保留，只在其后接一段。
- * 追加只作用于 should_reply，不污染 addressed / needs_search。
+ * GATE_REPLY_QUESTION_PROMPT / _TRUE_PROMPT / _FALSE_PROMPT 是 should_reply 的
+ * 正文 / criteria.true / criteria.false 的**唯一来源**：代码不再拼接任何内置文案。
+ * 该覆盖只作用于 should_reply，不污染 addressed / needs_search。
  */
-test("custom reply prompts are appended to the should_reply slots", () => {
+test("custom reply prompts are the sole source of the should_reply slots", () => {
   const questions = buildQuestions("小猫") as any;
   const should = questions.should_reply;
-  // 正文：基础文案 + 追加文案。
-  assert.match(should.instructions, /Should 小猫, a member of this QQ chat, send a message now/);
-  assert.match(should.instructions, /reply whenever it feels natural\./);
-  // true 标准：基础文案 + 追加文案。
-  assert.match(should.criteria.true, /new_messages call for a response from 小猫/);
-  assert.match(should.criteria.true, /add extra true guidance\./);
-  // false 标准：基础文案 + 追加文案。
-  assert.match(should.criteria.false, /new_messages do not need anything from 小猫/);
-  assert.match(should.criteria.false, /add extra false guidance\./);
-  // 其它两题不受影响。
+  // 正文逐字等于 env 值，不含内置英文底稿。
+  assert.equal(should.instructions, "reply whenever it feels natural.");
+  assert.doesNotMatch(should.instructions, /Should 小猫/);
+  // true 标准逐字等于 env 值。
+  assert.equal(should.criteria.true, "add extra true guidance.");
+  assert.doesNotMatch(should.criteria.true, /new_messages call for a response/);
+  // false 标准逐字等于 env 值。
+  assert.equal(should.criteria.false, "add extra false guidance.");
+  assert.doesNotMatch(should.criteria.false, /new_messages do not need anything/);
+  // 其它两题不受影响（仍为通用英文文案）。
   assert.doesNotMatch(questions.addressed.instructions, /reply whenever it feels natural\./);
   assert.doesNotMatch(questions.needs_search.instructions, /add extra (?:true|false) guidance\./);
 });

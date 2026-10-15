@@ -464,7 +464,6 @@ export class ChatRuntime {
           sessionLabel: session.label,
           botName: config.bot.name,
           aliases: config.bot.aliases,
-          persona: config.bot.persona,
           earlier: deciderRecords.filter((record) => !pendingSet.has(record)), // 上文（非本批，decider 窗口）
           pending,
           presence: session.history.presence(config.gate.presenceWindowMs, now), // 最近窗口内的活跃度

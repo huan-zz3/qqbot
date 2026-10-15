@@ -10,7 +10,7 @@
  * - dotenv 默认不覆盖已存在的环境变量。
  * - BOT_PERSONA_FILE（可空）指向的行为准则文件也在 import 时读取，相对路径相对
  *   进程启动目录；读不到直接抛错终止启动，绝不静默回退。人设分两层：BOT_PERSONA
- *   是内联身份，文件是行为准则；config.bot.persona 是二者合并值，仅 decider 用。
+ *   是内联身份，文件是行为准则，均只供回复提示词使用（decider 不看人设）。
  *
  * 每个配置项对应一个环境变量（命名与 .env.example/README 一致），经 str/num/
  * bool/list/idSet/textFile 读取并给出默认值；默认值即「什么都不配」时的保守配置。
@@ -141,8 +141,6 @@ export const config = {
     personaIdentity,
     // 行为准则：BOT_PERSONA_FILE 的内容，作为回复提示词的独立段落；留空则没有。
     personaRules,
-    // 给 decider 的完整人设（身份 + 准则合并），语义与拆分前一致。
-    persona: [personaIdentity, personaRules].filter(Boolean).join("\n"),
     // BOT_PERSONA_FILE 的原始路径（可空）；仅用于启动日志展示。
     personaFile,
     // 发言白名单：空集合 = 不在群里 / 私聊里说话。
@@ -173,14 +171,14 @@ export const config = {
     presenceWindowMs: num("GATE_PRESENCE_WINDOW_MS", 5 * 60 * 1000),
     // decider 的 needs_search 分数高于它就给模型挂上联网搜索工具。
     searchThreshold: num("GATE_SEARCH_THRESHOLD", 0.1),
-    // 自定义「什么情况下该回复」提示词：分别**追加**到 decider should_reply 问题的正文、true/false
-    // 判定标准之后；留空即不追加（保持内置文案）。
+    // 自定义「什么情况下该回复」提示词：**唯一来源**，直接作为 decider should_reply 问题的
+    // 正文 / true / false；代码不再拼接任何内置文案。decider 可用时三项必填，缺任一启动即退出（见 index.ts）。
     replyPrompt: {
-      // 追加到问题正文（instructions；注意不是 decider 的 state 对象）之后。
+      // should_reply 问题正文（instructions；注意不是 decider 的 state 对象）。
       question: str("GATE_REPLY_QUESTION_PROMPT"),
-      // 追加到「该回复」判定标准之后。
+      // 「该回复」判定标准（criteria.true）。
       true: str("GATE_REPLY_TRUE_PROMPT"),
-      // 追加到「不该回复」判定标准之后。
+      // 「不该回复」判定标准（criteria.false）。
       false: str("GATE_REPLY_FALSE_PROMPT"),
     },
     // 累计强制回复：指定群内各自累计自上次发言/上次强制以来的群消息，达到条数后下一次判断强制回复一次
