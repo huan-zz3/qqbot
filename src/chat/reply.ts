@@ -4,7 +4,6 @@
  * 输出约定（与提示词一一对应）：
  * - 模型每行是一条消息；单独一行 [表情包#编号] 表示发收藏的表情包；
  *   聊天记录里的 [表情包：描述] 只是展示文字，不可当发送语法（提示词已点明）。
- * - 只输出 [不回复]（SKIP_MARKER）或空白表示不说话；
  * - 回复里写的 @名字 由发送层变成真 @（runtime.ts -> napcat/message.js textToSegments）。
  *
  * 发送规划（planSends）：短回复逐段（逐行）发；行数超过 forwardParts（默认 5）或总字数超过
@@ -20,9 +19,6 @@ import { chatWithTools, type ChatMessage, type Tool, type ToolGroup } from "../l
 import type { OpenCodeAgent } from "../opencode/agent.js";
 import type { McpSearch } from "../search/mcp-search.js";
 import { formatLine, type ChatRecord, type Scope } from "./history.js";
-
-// 模型用它表示「此刻不说话」。
-export const SKIP_MARKER = "[不回复]";
 
 /** generateReply 的输入：会话快照 + 给模型看的历史与可用素材。 */
 export type ReplyContext = {
@@ -75,7 +71,6 @@ export function buildSystemPrompt(ctx: ReplyContext, toolNames: string[], search
   lines.push(
     `你在${scene}里，现在是北京时间 ${now}。`,
     "你的输出会原样发到聊天里：QQ 不渲染 Markdown，每一行会作为一条单独的消息发出。",
-    `如果你觉得此刻不说话更合适，就只输出 ${SKIP_MARKER}。`,
   );
   if (ctx.memories.length > 0) {
     lines.push("", "你记得的关于他们的事：", ...ctx.memories.map((memory) => `- ${memory}`), "");
@@ -131,11 +126,11 @@ export function buildTranscript(ctx: ReplyContext): string {
 /**
  * 解析模型原始输出为回复片段。
  * 步骤：去掉 Markdown 装饰 → 逐行切分 → 行内把 [表情包#编号] 拆成 sticker 片段。
- * @returns 含 [不回复] 或没有有效内容时返回空数组（不发送）；最多取 config.reply.maxParts 段。
+ * @returns 无有效内容（纯空白输出）时返回空数组（上层按异常处理、不发送）；最多取 config.reply.maxParts 段。
  */
 export function postProcess(raw: string, botName: string): ReplyPart[] {
   let text = raw.trim();
-  if (!text || text.includes(SKIP_MARKER)) return [];
+  if (!text) return [];
   text = text
     .replace(/\*\*|__|`+/g, "")
     .replace(/^#{1,6}\s+/gm, "");
@@ -291,7 +286,7 @@ export type ReplyTools = {
  * 联网搜索与 opencode 各成一个工具组，各自独立计轮（上限见 config.search/opencode.maxToolRounds）。
  * @param ctx 会话快照。
  * @param backends 本次可挂载的后端；缺省表示都不挂。
- * @returns 空数组表示模型选择不回复。
+ * @returns 空数组表示模型未产出有效内容（上层按异常处理，记 warn 且不发送）。
  */
 export async function generateReply(ctx: ReplyContext, backends: ReplyTools): Promise<ReplyPart[]> {
   const groups: ToolGroup[] = [];

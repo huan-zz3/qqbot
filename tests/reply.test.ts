@@ -2,7 +2,7 @@
  * reply.test.ts —— 回复生成与发送规划（src/chat/reply.ts）单元测试。
  *
  * 覆盖：
- * - postProcess：跳过标记、Markdown/名字前缀清理、按行成条、长度与条数上限、
+ * - postProcess：空白输出、Markdown/名字前缀清理、按行成条、长度与条数上限、
  *   [表情包#编号] 标记解析；
  * - buildSystemPrompt / buildTranscript：提示词只列事实（表情包、记忆、搜索能力），
  *   聊天记录格式（时间、★ 待回应、bot 自称「你」）；
@@ -21,16 +21,15 @@ process.env.REPLY_FORWARD_PARTS = "2";
 process.env.REPLY_FORWARD_CHARS = "30";
 
 // 动态 import：让上面的 env 先于 config.ts 读取（静态 import 会被提升到赋值之前）。
-const { postProcess, buildTranscript, buildSystemPrompt, planSends, dropRepeatedEndings, SKIP_MARKER } = await import(
+const { postProcess, buildTranscript, buildSystemPrompt, planSends, dropRepeatedEndings } = await import(
   "../src/chat/reply.js"
 );
 
 // 简写构造文本回复段（ReplyPart 的 text 形态）。
 const text = (value: string) => ({ kind: "text", text: value });
 
-// 跳过标记：模型只输出 [不回复] 或纯空白时，解析结果为空数组（上层据此不发送）。
-test("skip marker and empty output send nothing", () => {
-  assert.deepEqual(postProcess(SKIP_MARKER, "小猫"), []);
+// 纯空白输出：解析结果为空数组（上层按异常处理、不发送）。
+test("blank output yields nothing", () => {
   assert.deepEqual(postProcess("  ", "小猫"), []);
 });
 

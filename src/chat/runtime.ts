@@ -472,7 +472,7 @@ export class ChatRuntime {
         },
         this.deps.decider,
       );
-      // 强制判定一经作出即清零：即便模型稍后输出 [不回复]，也不会持续卡在阈值反复强制。
+      // 强制判定一经作出即清零：被强制的批次必发消息，且计数不会持续卡在阈值反复强制。
       if (force) session.sinceBot = 0;
       // 每次判断都记日志：决定与来源、分数、消息摘要，便于调阈值。
       logger.info(`[gate] ${session.key} ${formatDecision(decision)} :: ${summarize(pending)}`);
@@ -535,8 +535,8 @@ export class ChatRuntime {
     const recentBot = records.filter((record) => record.fromBot).map((record) => record.text);
     const parts = dropRepeatedEndings(generated, recentBot);
     if (parts.length === 0) {
-      // 模型输出 [不回复] 或空白时到此为止，不发言。
-      logger.info(`[chat] ${session.key} 模型选择不回复`);
+      // 模型未产出有效内容（纯空白/接口异常）：记 warn 并跳过本轮发送。
+      logger.warn(`[chat] ${session.key} 模型未产出有效内容，跳过发送`);
       return;
     }
 

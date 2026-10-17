@@ -3,7 +3,7 @@
  *
  * 用假的 decider（decider 打分）、假 client（记录发送/动作）、假 fetch（拦截 deepseek 请求并
  * 按队列返回模型输出）驱动真实会话逻辑，覆盖：防抖批处理、被 @ 降低门槛、白名单过滤、
- * [不回复] 跳过、表情包/图片先识图再交给 decider、私聊记忆跨会话使用、@ 名字查询与缓存、
+ * 空白输出跳过、表情包/图片先识图再交给 decider、私聊记忆跨会话使用、@ 名字查询与缓存、
  * 搜索工具挂载条件、长回复合并转发与降级、引用消息（历史命中或 get_msg 拉取）、
  * 回复 bot 同时 @ 他人时的收件人判定等。
  *
@@ -186,9 +186,9 @@ test("ignores disabled groups and the bot's own messages", async () => {
   assert.equal(sent.length, 0);
 });
 
-// 模型输出恰好是 [不回复]：postProcess 解析为空，什么都不发。
-test("model can decline with the skip marker", async () => {
-  const { runtime, sent } = setup(async () => ({ should_reply: 0.9, addressed: 0.9 }), ["[不回复]"]);
+// 模型输出纯空白：postProcess 解析为空，什么都不发（视为异常，不发送）。
+test("blank model output sends nothing", async () => {
+  const { runtime, sent } = setup(async () => ({ should_reply: 0.9, addressed: 0.9 }), ["   "]);
   runtime.handle(groupMessage("hello"));
   await wait(150);
   assert.equal(sent.length, 0);
@@ -614,17 +614,17 @@ test("accumulated group messages force a reply once, then the counter resets", a
   assert.equal(sent.length, 1);
 });
 
-// 另建一个 runtime：强制判定即清零——被强制的批次模型输出 [不回复]（没真发消息）时计数也已归零，
+// 另建一个 runtime：强制判定即清零——被强制的批次模型未产出有效内容（空白，没真发消息）时计数也已归零，
 // 因此后续低分消息不会被持续强制；再累计满后才第二次强制并真正发出。
-test("a forced batch that declines still resets the counter", async () => {
-  const { runtime, sent } = setup(async () => ({ should_reply: 0.1, addressed: 0.1 }), ["[不回复]", "这次真回"]);
+test("a forced batch that produces nothing still resets the counter", async () => {
+  const { runtime, sent } = setup(async () => ({ should_reply: 0.1, addressed: 0.1 }), ["   ", "这次真回"]);
   const pump = async () => {
     runtime.handle(groupMessage("灌水", [], 501, 7));
     await wait(200);
   };
   await pump(); // 1
   await pump(); // 2
-  await pump(); // 3 → 强制，但模型选择不回复 → 不发
+  await pump(); // 3 → 强制，但模型未产出内容 → 不发
   assert.equal(sent.length, 0);
   await pump(); // 已清零 → 1
   await pump(); // 2
