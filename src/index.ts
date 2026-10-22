@@ -364,6 +364,17 @@ async function main(): Promise<void> {
     }
   }
 
+  // 会话历史的时间上限：0 表示关闭；负数或非数字直接退出，避免配错被 num() 静默回退成默认值。
+  const rawMaxAge = process.env.HISTORY_MAX_AGE_MS?.trim();
+  if (rawMaxAge && !Number.isFinite(Number(rawMaxAge))) {
+    logger.error(`HISTORY_MAX_AGE_MS 不是有效数字：${rawMaxAge}`);
+    process.exit(1);
+  }
+  if (config.history.maxAgeMs < 0) {
+    logger.error(`HISTORY_MAX_AGE_MS 必须 >= 0（0 表示关闭按时间裁剪），当前为 ${config.history.maxAgeMs}`);
+    process.exit(1);
+  }
+
   // 上下文窗口不能超过会话保留环，否则会被静默裁掉、看起来「配了却没生效」。
   const historyWindows: [string, number][] = [
     ["HISTORY_CONTEXT_MESSAGES", config.history.contextMessages],
@@ -397,7 +408,7 @@ async function main(): Promise<void> {
   const opencodeInput =
     [config.opencode.inputPrefix && "pre", config.opencode.inputSuffix && "suf"].filter(Boolean).join("+") || "off";
   logger.info(
-    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} prompt_dump=${config.debug.promptDumpDir || "off"} vision=${visionNeeded ? `${VISION_MODEL}/${config.vision.detail}/t${config.vision.timeoutMs}/mt${config.vision.maxTokens}/wait${MEDIA_WAIT_MS}` : "off"} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${materials ? `on(${config.files.dir},keep=${Math.round(config.files.keepMs / 3600000)}h)` : config.files.enabled ? "off(materialize)" : "off"} stickers=${stickers ? `${stickers.size}(archive=${stickers.archiveSize},recognize=${config.stickers.recognize ? "on" : "off"})` : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} prompt_dump=${config.debug.promptDumpDir || "off"} vision=${visionNeeded ? `${VISION_MODEL}/${config.vision.detail}/t${config.vision.timeoutMs}/mt${config.vision.maxTokens}/wait${MEDIA_WAIT_MS}` : "off"} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${materials ? `on(${config.files.dir},keep=${Math.round(config.files.keepMs / 3600000)}h)` : config.files.enabled ? "off(materialize)" : "off"} stickers=${stickers ? `${stickers.size}(archive=${stickers.archiveSize},recognize=${config.stickers.recognize ? "on" : "off"})` : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} history_max_age=${config.history.maxAgeMs > 0 ? `${config.history.maxAgeMs}ms` : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();

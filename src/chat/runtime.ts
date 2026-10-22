@@ -233,7 +233,7 @@ export class ChatRuntime {
         scope,
         target: scope === "group" ? { groupId: event.group_id! } : { userId: event.user_id },
         label: scope === "group" ? String(event.group_id) : event.sender?.nickname || String(event.user_id),
-        history: new SessionHistory(config.history.maxMessages),
+        history: new SessionHistory(config.history.maxMessages, config.history.maxAgeMs, key),
         pending: [],
         firstPendingAt: undefined,
         timer: undefined,

@@ -177,6 +177,8 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `GATE_PRIVATE_THRESHOLD` | 0.35 | 私聊发言阈值 |
 | `GATE_DIRECT_THRESHOLD` | 0.45 | 被 @ 或被回复时的阈值 |
 | `GATE_DIRECT_USERS` | | 名单里的 QQ 被 @ 或被回复时视同机器人自己被 @/回复，同样走 0.45 这个 direct 阈值（防抖也按 direct 处理）；逗号分隔 |
+| `HISTORY_MAX_MESSAGES` | 80 | 每个会话在内存里保留的聊天记录条数上限（上下文窗口从这些记录里取） |
+| `HISTORY_MAX_AGE_MS` | 86400000 | 消息保留时长（毫秒，默认 24 小时）：超过即从会话历史里删除，不再进入回复 / decider / 记忆上下文；`0` 表示关闭按时间裁剪。与 `HISTORY_MAX_MESSAGES` 各自独立、谁先命中谁生效；裁剪只在收到新消息时发生，安静会话里的旧记录会留到下一条消息到达才清 |
 | `HISTORY_CONTEXT_MESSAGES` | 40 | 给模型看的**共享**最近消息条数（所有人共用） |
 | `HISTORY_USER_CONTEXT_MESSAGES` | 20 | 本批每个发言群友**各自额外保证**纳入的最近消息条数（叠加在共享窗口之上，刷屏者触发的 prompt 更完整携带其内容）；此外，模型窗口还会在「共享窗口 ∪ 逐账号保证」已触及的范围（最旧选中消息→最新）内补齐 **bot 自己**的消息（不新增配置、不改变窗口下界） |
 | `DECIDER_CONTEXT_MESSAGES` | 40 | 给 decider 看的**共享**最近消息条数（与模型窗口分开配置） |

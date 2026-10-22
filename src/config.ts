@@ -343,6 +343,8 @@ export const config = {
   // 会话内存里的消息记录。
   history: {
     maxMessages: num("HISTORY_MAX_MESSAGES", 80),
+    // 消息保留时长（毫秒）：超过即从历史里删除，0 表示不按时间裁剪。
+    maxAgeMs: num("HISTORY_MAX_AGE_MS", 24 * 60 * 60 * 1000),
     // 给模型看的共享最近消息条数（所有人共用）；bot 自己的多行回复占多条记录，要留够才能看懂上下文。
     contextMessages: num("HISTORY_CONTEXT_MESSAGES", 40),
     // 本批每个发言群友各自额外保证纳入的最近消息条数（叠加在共享窗口之上，让刷屏者的内容更完整）。

@@ -7,10 +7,12 @@
  *   - relation / formatLine 把记录渲染成统一格式「说话人 → 对象：正文（引用 某人的「原文」）」，
  *     decider 输入、回复提示词、记忆提示词共用该格式，三处必须保持一致；
  *   - SessionHistory 保存有界的历史记录，供防抖判断与回复时取最近上下文。
- * 约束：records 只保留最近 maxRecords 条，但 total 累计数不随裁剪减少，
+ * 约束：records 同时受两道上限约束——条数（maxRecords）与时间（maxAgeMs，毫秒，
+ * 0 表示不按时间裁剪），两者各自独立、先命中者生效；但 total 累计数不随裁剪减少，
  * 因此 since(mark) 能识别标记早于当前窗口的情况；botMessageIds 用于判断
  * 某条引用/回复目标是否由 bot 自己发出。
  */
+import { logger } from "../logger.js";
 import type { FileRef } from "./files.js";
 
 /** 会话类型：群聊或私聊；长期记忆按此分区。 */
@@ -107,8 +109,10 @@ const MAX_BOT_MESSAGE_IDS = 500;
 
 /**
  * 单个会话的有界消息记录。
- * 超出 maxRecords 时从最旧开始裁剪；total 是累计加入数、不随裁剪减少，
- * 调用方用 total 做标记，since(mark) 在记录被裁剪后仍能只返回保留下来的部分。
+ * 超出 maxRecords 时从最旧开始裁剪；超过 maxAgeMs 的记录在下次 add 时删除
+ * （安静会话里的旧记录会留到下一条消息到达才清，这是有意的低成本实现）。
+ * total 是累计加入数、不随裁剪减少，调用方用 total 做标记，
+ * since(mark) 在记录被裁剪后仍能只返回保留下来的部分。
  */
 export class SessionHistory {
   private readonly records: ChatRecord[] = [];
@@ -117,15 +121,24 @@ export class SessionHistory {
   // 累计加入过的记录数（不因裁剪减少）；标记记进这个计数，裁剪后依然可识别
   total = 0;
 
-  /** @param maxRecords 记录上限，超出后丢弃最旧的。 */
-  constructor(private readonly maxRecords: number) {}
+  /**
+   * @param maxRecords 记录条数上限，超出后丢弃最旧的。
+   * @param maxAgeMs 记录保留时长（毫秒），超过即删除；0 表示不按时间裁剪。
+   * @param label 会话标识（仅用于日志），如 group:123。
+   */
+  constructor(
+    private readonly maxRecords: number,
+    private readonly maxAgeMs = 0,
+    private readonly label = "",
+  ) {}
 
-  /** 追加一条记录；超出上限时裁剪最旧记录，并登记 bot 消息 ID（集合同样限长）。 */
-  add(record: ChatRecord): void {
+  /**
+   * 追加一条记录：先删掉已过期的既有记录，再追加新记录（刚到达的消息不会在同一次调用里被删），
+   * 最后按条数上限裁剪最旧部分；同时登记 bot 消息 ID（集合同样限长）。
+   * @param now 当前时间戳（毫秒），默认系统时间；供测试注入。
+   */
+  add(record: ChatRecord, now = Date.now()): void {
     this.total++;
-    this.records.push(record);
-    // 一次性丢弃超限的最旧部分
-    if (this.records.length > this.maxRecords) this.records.splice(0, this.records.length - this.maxRecords);
     if (record.fromBot && record.messageId !== undefined) {
       this.botMessageIds.add(record.messageId);
       // Set 按插入顺序迭代，删掉最早登记的那个
@@ -133,6 +146,33 @@ export class SessionHistory {
         this.botMessageIds.delete(this.botMessageIds.values().next().value!);
       }
     }
+    const dropped = this.dropExpired(now);
+    if (dropped > 0) {
+      logger.debug(
+        `[history] ${this.label || "-"} 按时间裁剪 ${dropped} 条（保留 ${this.maxAgeMs}ms），剩余 ${this.records.length} 条`,
+      );
+    }
+    this.records.push(record);
+    // 一次性丢弃超限的最旧部分
+    if (this.records.length > this.maxRecords) this.records.splice(0, this.records.length - this.maxRecords);
+  }
+
+  /**
+   * 删除时间超过 maxAgeMs 的既有记录，返回删除条数。
+   * 过期判据为「now - time 严格大于 maxAgeMs」，与 presence 的窗口判断一致；maxAgeMs<=0 时不做任何事。
+   */
+  private dropExpired(now: number): number {
+    if (this.maxAgeMs <= 0 || this.records.length === 0) return 0;
+    const cutoff = now - this.maxAgeMs;
+    let dropped = 0;
+    // 逐条删除，不依赖记录按时间严格递增（乱序事件也不会漏删）。
+    for (let i = this.records.length - 1; i >= 0; i--) {
+      if (this.records[i]!.time < cutoff) {
+        this.records.splice(i, 1);
+        dropped++;
+      }
+    }
+    return dropped;
   }
 
   /** 该消息 ID 是否由 bot 自己发出（判断「在回复 bot」用）。 */

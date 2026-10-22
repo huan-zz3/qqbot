@@ -11,14 +11,14 @@ const { SessionHistory } = await import("../src/chat/history.js");
 
 let clock = 0;
 
-// 构造一条历史记录；speaker 传 "bot" 表示机器人自己发的。
-function record(speaker: number | "bot", text: string) {
+// 构造一条历史记录；speaker 传 "bot" 表示机器人自己发的；time 缺省用自增时钟。
+function record(speaker: number | "bot", text: string, time = clock++) {
   const fromBot = speaker === "bot";
   return {
     userId: fromBot ? 100 : (speaker as number),
     name: fromBot ? "bot" : String(speaker),
     text,
-    time: clock++,
+    time,
     fromBot,
     atBot: false,
     replyToBot: false,
@@ -91,3 +91,79 @@ test("空历史返回空", () => {
   const history = new SessionHistory(10);
   assert.deepEqual(history.context(5, 5, [7]), []);
 });
+
+// ---- 按时间裁剪（HISTORY_MAX_AGE_MS） ----
+
+test("超过保留时长的记录在收到新消息时被清除", () => {
+  const history = new SessionHistory(100, 1000);
+  history.add(record(7, "a", 0), 0);
+  history.add(record(8, "b", 500), 500);
+  // now=3000、maxAge=1000 → cutoff=2000，a/b 过期，c 是新加入的
+  history.add(record(7, "c", 3000), 3000);
+  assert.deepEqual(texts(history.recent(10)), ["c"]);
+});
+
+test("只删除过期记录，未过期的保留且顺序不变", () => {
+  const history = new SessionHistory(100, 1000);
+  history.add(record(7, "old", 0), 0);
+  history.add(record(8, "keep1", 1500), 1500);
+  history.add(record(7, "keep2", 2200), 2200);
+  // now=2500、cutoff=1500：只删 old；keep1 恰好在边界上保留。
+  history.add(record(8, "new", 2500), 2500);
+  assert.deepEqual(texts(history.recent(10)), ["keep1", "keep2", "new"]);
+});
+
+test("恰好在保留时长边界上的记录保留，超过 1ms 即删除", () => {
+  const history = new SessionHistory(100, 1000);
+  history.add(record(7, "edge", 0), 0);
+  history.add(record(8, "within", 1), 1);
+  // cutoff=1001：edge（now-time=1001）删除，within（999）保留。
+  history.add(record(7, "new", 1001), 1001);
+  assert.deepEqual(texts(history.recent(10)), ["within", "new"]);
+
+  const boundary = new SessionHistory(100, 1000);
+  boundary.add(record(7, "edge", 0), 0);
+  // now-time 恰好等于 1000 → 保留。
+  boundary.add(record(8, "new", 1000), 1000);
+  assert.deepEqual(texts(boundary.recent(10)), ["edge", "new"]);
+});
+
+test("maxAgeMs=0 时不按时间裁剪（默认行为）", () => {
+  const history = new SessionHistory(100);
+  history.add(record(7, "a", 0), 0);
+  history.add(record(8, "b", 10), 10_000_000);
+  assert.deepEqual(texts(history.recent(10)), ["a", "b"]);
+});
+
+test("时间裁剪后 total 不减少，since(mark) 只返回保留部分", () => {
+  const history = new SessionHistory(100, 1000);
+  history.add(record(7, "a", 0), 0);
+  history.add(record(7, "b", 100), 100);
+  const mark = history.total;
+  history.add(record(7, "c", 5000), 5000);
+  assert.equal(history.total, 3);
+  assert.deepEqual(texts(history.since(mark)), ["c"]);
+});
+
+test("新记录即使时间戳偏旧也不会在同一次 add 中被删除", () => {
+  const history = new SessionHistory(100, 1000);
+  history.add(record(7, "stale", 0), 5000);
+  assert.deepEqual(texts(history.recent(10)), ["stale"]);
+  // 下一条消息到达时才清掉它。
+  history.add(record(7, "fresh", 6000), 6000);
+  assert.deepEqual(texts(history.recent(10)), ["fresh"]);
+});
+
+test("时间上限与条数上限互相独立，谁先命中谁生效", () => {
+  const history = new SessionHistory(3, 1000);
+  history.add(record(7, "a", 0), 0);
+  history.add(record(7, "b", 100), 100);
+  history.add(record(7, "c", 200), 200);
+  history.add(record(7, "d", 300), 300);
+  // 条数上限先生效。
+  assert.deepEqual(texts(history.recent(10)), ["b", "c", "d"]);
+  // 时间上限把之前的记录全清掉。
+  history.add(record(7, "e", 5000), 5000);
+  assert.deepEqual(texts(history.recent(10)), ["e"]);
+});
+
