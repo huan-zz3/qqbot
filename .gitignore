@@ -11,3 +11,5 @@ logs/
 .codegraph/
 nohup.out
 PERSONA.txt
+
+.slim/deepwork/

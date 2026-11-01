@@ -21,6 +21,7 @@
 - 只用 deepseek-flash 说话：提示词只交代事实（QQ 不渲染 Markdown、每行是一条消息），不规定长度语气，也不给示例句。模型无法「选择不回复」——decider 判定该回复就一定发消息（仅模型返回纯空白、即接口异常时才记 warn 跳过）。
 - 表情包：自动收藏群友发的表情包，用识图模型（独立后端，SiliconFlow 的 DeepSeek-OCR）写描述；模型想发时自己挑。识别与发送可分开开关（`STICKERS_RECOGNIZE_ENABLED`），积累够了可关掉识别、只读现有库继续发送。QQ 小黄脸按名字收发（`[doge]` 会发成真表情）。
 - 看得懂图片：普通图片也交给识图模型识别，以 `[图片：描述]` 出现在聊天记录里。
+- 发语音：模型在回复里单独写一行 `[语音]`（或 `[语音:happy]` 指定情绪），这一行就由 MiniMax 语音合成念出来，不再发文字；太长会按句拆成几条语音。
 - 连发多条，长了就合并转发：每行一条消息，按打字速度间隔发出；回复长到超过 5 行或 300 字时，第一条文本单独发出，从第二条起合并成一条转发，不刷屏。
 - 联网搜索：decider 觉得可能需要查资料时，把一个远程 MCP 搜索服务器（多引擎搜索 + 抓取网页正文）暴露的工具挂给模型，搜不搜、抓不抓由模型决定。
 - 只读问代码（可选）：让模型在预定义的代码仓库里检索、阅读并回答问题（`opencode acp`，可用短名切换仓库）。只读由三重保障：不声明 fs 能力、拒绝一切权限请求、子进程注入只读配置 deny 掉写/命令/联网类工具。群友发来的 zip/rar 日志会被解压到本地目录，模型可让 opencode 去读（见「聊天压缩包联动」）。
@@ -58,6 +59,7 @@ NapCat ──WS──> 收消息 ──防抖合并──> decider 判断 ──
 - 一个已登录的 NapCat（推荐 [NapCat-Docker](https://github.com/NapNeko/NapCat-Docker)）
 - [DeepSeek API key](https://platform.deepseek.com/)（回复模型）
 - [SiliconFlow API key](https://cloud.siliconflow.cn/)（图像识别，独立于回复模型；开图片识图、或表情包识别才需要，表情包只发送不识别时不需要）
+- [MiniMax API key](https://platform.minimax.cn/) 与一个音色 ID（语音合成，独立后端；`VOICE_ENABLED=true` 时必填）
 - [Perplexity API key](https://console.perplexity.ai)（decider，可选）
 
 ### 1. 在 NapCat 里开 WebSocket 服务端
@@ -208,6 +210,16 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 | `VISION_DETAIL` | high | 传给识图接口 `image_url` 的细节级别：`low` / `high` / `auto`，非法值启动报错退出 |
 | `VISION_TIMEOUT_MS` / `VISION_MAX_TOKENS` | 30000 / 512 | 识图请求超时（毫秒）与输出上限；须为正，且超时须小于媒体补全等待上限（`MEDIA_WAIT_MS`=35000），否则启动报错退出 |
 | `IMAGES_ENABLED` | true | 普通图片识图（图像识别后端写死为 SiliconFlow 的 `deepseek-ai/DeepSeek-OCR`，模型名不可配） |
+| `VOICE_ENABLED` | false | 语音回复总开关；关闭时 `[语音]` 标记按普通文字发 |
+| `VOICE_API_KEY` | | MiniMax 语音合成密钥；启用时必填，缺失启动报错退出 |
+| `VOICE_VOICE_ID` | | MiniMax 音色 ID；启用时必填（缺失启动报错退出） |
+| `VOICE_API_URL` | `https://api.minimax.cn/v1/t2a_v2` | 合成端点；华北可换 `https://api-bj.minimaxi.com/v1/t2a_v2` |
+| `VOICE_MODEL` | speech-2.8-turbo | 合成模型；只有 `speech-2.8-*` 支持语气词标签 |
+| `VOICE_SPEED` / `VOICE_VOL` / `VOICE_PITCH` | 1 / 1 / 0 | 语速 [0.5,2]、音量 (0,10]、音调 [-12,12]，越界启动报错退出 |
+| `VOICE_EMOTION` | | 默认情绪（happy/sad/angry/fearful/disgusted/surprised/calm）；标记里的情绪优先，留空由 MiniMax 自动匹配 |
+| `VOICE_MAX_SECONDS` | 45 | 单条语音时长上限（按 4.5 字/秒 × 语速估算），超长按句拆成多条 |
+| `VOICE_TIMEOUT_MS` | 30000 | 单次合成请求超时（毫秒） |
+| `VOICE_PROMPT` | | 给模型的语音说明；留空用内置（标记写法与可选情绪） |
 | `FILES_ENABLED` | true | 聊天压缩包能力：记录里显示 `[文件：…]`，并把本批发言人的 zip/rar 解压给模型 |
 | `FILES_MATERIALIZE` | true | 是否下载解压压缩包（与 `OPENCODE_ENABLED` 解耦）；关掉则不下载，仅保留记录展示 |
 | `FILES_DIR` / `FILES_MAX_BYTES` / `FILES_MAX_FILES` | data/uploads / 50MB / 3 | 解压根目录（相对值会在启动时解析为绝对路径）、单包下载上限（流式边读边限）、单批最多处理几个包 |
@@ -242,6 +254,17 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 - 已有聊天记录可以补学一遍：先停掉 bot，再运行 `pnpm learn-history [条数]`，它会从 NapCat 拉白名单私聊和群的最近记录。
 
 `data/` 里有群友的个人信息和表情包，不要提交或公开。
+
+## 语音回复（可选）
+
+- 模型在单独一行写 `[语音]`，这一行文字交给 MiniMax 合成 mp3，再以 QQ 语音消息发出，**不再发文字**；写 `[语音:happy]` 可指定情绪（happy/sad/angry/fearful/disgusted/surprised/calm）。
+- 念之前会去掉 `@`、`[表情包#编号]`、QQ 小黄脸标记；`speech-2.8-*` 模型还支持 `(laughs)`、`(sighs)` 这类语气词标签（提示词只对 2.8 系列列出这些标签）。
+- 单条按 45 秒（约 200 字，随 `VOICE_SPEED` 变化）切分，超长就发成几条语音。
+- 语音消息不带引用（引用只挂在文字首条上）：record 段必须单独发，否则 NapCat 会吞掉 record 转换异常、只把 reply 段发出去，导致假成功。
+- 合成失败或发送失败都会重试一次，仍失败则该段**改发文字**（日志带会话与片段）；退文字再失败按现有语义报「处理失败」。
+- 会话历史里记为 `[语音：正文]`，记忆与 decider 看到的是内容而不是二进制。
+- 群聊与私聊都支持，受 `/启动` `/停止` 约束；每条语音按字符计费，`VOICE_ENABLED=false` 时零成本。
+- **NapCat 侧需要能转 silk 的 ffmpeg**：NapCat 会把 mp3 转成 silk 再上传；Docker 镜像里的系统 ffmpeg 常缺 `ntsilk_s16le`（见 NapCat issue #2134），症状是 NapCat 日志里 `语音转换失败`，此时语音段会一直退成文字。
 
 ## 群管理模块（可选）
 
@@ -340,6 +363,7 @@ src/
 │   ├── runtime.ts        会话：防抖、判断、回复、发送、触发记忆整理
 │   ├── gate.ts           decider 问题与阈值、无 decider 时的兜底
 │   ├── reply.ts          提示词、输出解析（文字行 / 表情包）、分条或合并转发
+│   ├── voice.ts          语音标记解析、朗读文本清洗、按语速切分（纯逻辑）
 │   ├── stickers.ts       表情包收藏、识图描述、重发（淘汰转入归档，重现免识图）
 │   ├── images.ts         普通图片识图
 │   ├── files.ts          聊天文件下载后端（解析地址 + 流式取字节）
@@ -360,7 +384,8 @@ src/
 │   └── client.ts         通用判定请求（POST state + questions）
 ├── llm/
 │   ├── deepseek.ts       回复模型 deepseek-flash：工具循环、JSON（失败重试一次）
-│   └── vision.ts         图像识别后端（写死 SiliconFlow deepseek-ai/DeepSeek-OCR）
+│   ├── vision.ts         图像识别后端（写死 SiliconFlow deepseek-ai/DeepSeek-OCR）
+│   └── tts.ts            MiniMax 语音合成（独立后端，与回复模型/识图互不引用）
 ├── search/               MCP 联网搜索客户端
 ├── opencode/             只读 OpenCode（ACP）：进程编排、子进程环境（代理 + 只读加固）、目录选择、模型选择、权限裁决
 └── cli/learn-history.ts  从历史记录补学记忆
@@ -380,6 +405,7 @@ pnpm typecheck
 - 联网搜索依赖外部 MCP 服务器（streamable HTTP）的可用性；它挂掉的期间搜索暂不挂载，之后按指数退避自动重连、成功后自动恢复，无需重启。
 - 记忆和表情包描述会把群友的发言交给 DeepSeek 处理，图片/表情包也会交给图像识别服务（SiliconFlow）处理，请在群里告知大家。
 - 启用只读 OpenCode 后，白名单群 / 私聊里的消息都可能驱动它读取 `OPENCODE_CWD` / `OPENCODE_DIRS` 里任一仓库的内容并转发到会话里；只读约束挡的是改动与执行，挡不住信息外泄，请自行评估仓库敏感度。
+- 开了语音（`VOICE_ENABLED=true`）时，要念的文本会交给 MiniMax 合成，请在群里告知大家。
 
 ## 致谢
 

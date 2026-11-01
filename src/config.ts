@@ -108,6 +108,10 @@ const DEFAULT_FILES_PROMPT =
 // FILES_READ_PROMPT 未配置时，给模型「怎么读解压目录」的说明（仅在挂了 opencode 工具时追加）。
 const DEFAULT_FILES_READ_PROMPT = "需要查看压缩包里的内容时，可调用 opencode 读取清单里给出的解压目录。";
 
+// VOICE_PROMPT 未配置时给模型的语音说明；只交代事实（标记写法与可选情绪），不写语气/长度规则。
+const DEFAULT_VOICE_PROMPT =
+  "在单独一行（行首）写 [语音] 会让这一行文字合成语音发出，不再发文字；写成 [语音:happy] 可指定情绪，可选 happy、sad、angry、fearful、disgusted、surprised、calm。这一行里的 @、[表情包#编号]、QQ 小黄脸标记既不会被念出来，表情包标记也不会被发送。";
+
 // OPENCODE_ARGS 未配置时，默认以 `acp` 子命令启动（JSON-RPC over stdio 的 agent）。
 const opencodeArgs = list("OPENCODE_ARGS");
 
@@ -226,6 +230,27 @@ export const config = {
     timeoutMs: num("VISION_TIMEOUT_MS", 30000),
     // 输出上限：描述最终嵌进单行聊天记录，收在 512 以压低最坏延迟。
     maxTokens: num("VISION_MAX_TOKENS", 512),
+  },
+  // 语音合成（MiniMax TTS）：模型在某行写 [语音] / [语音:情绪] 时把该行合成语音发出。
+  // 启用时缺 VOICE_API_KEY / VOICE_VOICE_ID 等必填项会在启动时报错退出（校验见 index.ts）。
+  // 发送依赖 NapCat 侧 ffmpeg 把 mp3 转成 silk。
+  voice: {
+    enabled: bool("VOICE_ENABLED", false),
+    apiKey: str("VOICE_API_KEY"),
+    apiUrl: str("VOICE_API_URL", "https://api.minimax.cn/v1/t2a_v2"),
+    model: str("VOICE_MODEL", "speech-2.8-turbo"),
+    voiceId: str("VOICE_VOICE_ID"),
+    // 语速 / 音量 / 音调（MiniMax 参数）。
+    speed: num("VOICE_SPEED", 1),
+    vol: num("VOICE_VOL", 1),
+    pitch: num("VOICE_PITCH", 0),
+    // 全局默认情绪；模型标记里的情绪优先。
+    emotion: str("VOICE_EMOTION"),
+    // 单条语音的时长上限（秒），超长文本按语速切成多条。
+    maxSeconds: num("VOICE_MAX_SECONDS", 45),
+    timeoutMs: num("VOICE_TIMEOUT_MS", 30000),
+    // 给模型的语音说明（标记写法与可选情绪）；留空用内置默认。
+    prompt: str("VOICE_PROMPT", DEFAULT_VOICE_PROMPT),
   },
   // 联网搜索：连一个远程 MCP 服务器，把它暴露的全部工具挂给模型（无常驻凭证）。
   search: {

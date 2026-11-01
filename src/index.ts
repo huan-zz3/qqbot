@@ -18,6 +18,7 @@ import { Materials } from "./chat/materials.js";
 import { MemoryStore } from "./chat/memory.js";
 import { PowerSwitch } from "./chat/power.js";
 import { StickerStore, describeSticker } from "./chat/stickers.js";
+import { VOICE_EMOTIONS } from "./chat/voice.js";
 import { createDecider, type Decider } from "./decider/client.js";
 import { CronExecutor } from "./exec/cron-exec.js";
 import { DEEPSEEK_MODEL, completeJson } from "./llm/deepseek.js";
@@ -67,6 +68,51 @@ async function main(): Promise<void> {
       logger.error(
         `VISION_TIMEOUT_MS（当前 ${config.vision.timeoutMs}）必须小于媒体补全等待上限 ${MEDIA_WAIT_MS}，否则识图会被提前截断`,
       );
+      process.exit(1);
+    }
+  }
+
+  // 语音合成：启用时必须配好 MiniMax 参数，否则启动即退出，绝不静默失效（会表现为「该发语音却发了文字」）。
+  if (config.voice.enabled) {
+    if (!config.voice.apiKey) {
+      logger.error("VOICE_ENABLED 已开启，但缺少 VOICE_API_KEY");
+      process.exit(1);
+    }
+    if (!config.voice.voiceId) {
+      logger.error("VOICE_ENABLED 已开启，但缺少 VOICE_VOICE_ID");
+      process.exit(1);
+    }
+    if (!(config.voice.speed >= 0.5 && config.voice.speed <= 2)) {
+      logger.error(`VOICE_SPEED 必须在 [0.5, 2] 之间（当前 ${config.voice.speed}）`);
+      process.exit(1);
+    }
+    if (!(config.voice.vol > 0 && config.voice.vol <= 10)) {
+      logger.error(`VOICE_VOL 必须在 (0, 10] 之间（当前 ${config.voice.vol}）`);
+      process.exit(1);
+    }
+    if (!(config.voice.pitch >= -12 && config.voice.pitch <= 12)) {
+      logger.error(`VOICE_PITCH 必须在 [-12, 12] 之间（当前 ${config.voice.pitch}）`);
+      process.exit(1);
+    }
+    if (!Number.isInteger(config.voice.pitch)) {
+      logger.error(`VOICE_PITCH 必须是整数（当前 ${config.voice.pitch}）`);
+      process.exit(1);
+    }
+    try {
+      new URL(config.voice.apiUrl);
+    } catch {
+      logger.error(`VOICE_API_URL 不是合法的 URL（当前 ${config.voice.apiUrl}）`);
+      process.exit(1);
+    }
+    if (!(config.voice.maxSeconds > 0) || !(config.voice.timeoutMs > 0)) {
+      logger.error(
+        `VOICE_MAX_SECONDS 与 VOICE_TIMEOUT_MS 必须为正数（当前 ${config.voice.maxSeconds} / ${config.voice.timeoutMs}）`,
+      );
+      process.exit(1);
+    }
+    // 空值表示不指定情绪（由 MiniMax 自动匹配）；写了就必须是已知情绪，否则请求会被服务端拒绝。
+    if (config.voice.emotion && !(VOICE_EMOTIONS as readonly string[]).includes(config.voice.emotion)) {
+      logger.error(`VOICE_EMOTION 只能是 ${VOICE_EMOTIONS.join("/")} 之一或留空（当前 ${config.voice.emotion}）`);
       process.exit(1);
     }
   }
@@ -407,8 +453,9 @@ async function main(): Promise<void> {
   // opencode 自定义输入文本的配置状态（pre/suf/off；只报位不打印内容）。
   const opencodeInput =
     [config.opencode.inputPrefix && "pre", config.opencode.inputSuffix && "suf"].filter(Boolean).join("+") || "off";
+  const voice = config.voice.enabled ? `on(${config.voice.model}/${config.voice.voiceId}/${config.voice.maxSeconds}s)` : "off";
   logger.info(
-    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} prompt_dump=${config.debug.promptDumpDir || "off"} vision=${visionNeeded ? `${VISION_MODEL}/${config.vision.detail}/t${config.vision.timeoutMs}/mt${config.vision.maxTokens}/wait${MEDIA_WAIT_MS}` : "off"} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${materials ? `on(${config.files.dir},keep=${Math.round(config.files.keepMs / 3600000)}h)` : config.files.enabled ? "off(materialize)" : "off"} stickers=${stickers ? `${stickers.size}(archive=${stickers.archiveSize},recognize=${config.stickers.recognize ? "on" : "off"})` : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} history_max_age=${config.history.maxAgeMs > 0 ? `${config.history.maxAgeMs}ms` : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} prompt_dump=${config.debug.promptDumpDir || "off"} vision=${visionNeeded ? `${VISION_MODEL}/${config.vision.detail}/t${config.vision.timeoutMs}/mt${config.vision.maxTokens}/wait${MEDIA_WAIT_MS}` : "off"} voice=${voice} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${materials ? `on(${config.files.dir},keep=${Math.round(config.files.keepMs / 3600000)}h)` : config.files.enabled ? "off(materialize)" : "off"} stickers=${stickers ? `${stickers.size}(archive=${stickers.archiveSize},recognize=${config.stickers.recognize ? "on" : "off"})` : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} history_max_age=${config.history.maxAgeMs > 0 ? `${config.history.maxAgeMs}ms` : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();

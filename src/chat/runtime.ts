@@ -26,6 +26,7 @@
  */
 import { config } from "../config.js";
 import { logger } from "../logger.js";
+import { synthesizeSpeech } from "../llm/tts.js";
 import type { ModerationHandoff } from "../moderation/handoff.js";
 import type { NapcatClient, SendTarget } from "../napcat/client.js";
 import {
@@ -52,6 +53,7 @@ import type { MemoryStore } from "./memory.js";
 import type { PowerSwitch } from "./power.js";
 import { dropRepeatedEndings, generateReply, planSends, type ReplyPart } from "./reply.js";
 import type { StickerStore } from "./stickers.js";
+import { planVoicePieces } from "./voice.js";
 
 /**
  * 单个会话的运行时状态：群聊、私聊各持有一份，按 key（`group:<群号>` / `private:<QQ号>`）复用。
@@ -555,10 +557,15 @@ export class ChatRuntime {
         await this.sendForward(session, item.text, members);
         continue;
       }
+      // 引用只挂在第一条文本消息上；语音不带引用段（见 sendVoice）。
+      const quoted = index === 0 && quote;
+      // 语音片段不走 toSegments：合成 → 落 record 段，失败退文字（见 sendVoice）。
+      if (item.part.kind === "voice") {
+        await this.sendVoice(session, item.part, members);
+        continue;
+      }
       const sent = await this.toSegments(item.part, members);
       if (!sent) continue;
-      // 引用只挂在第一条文本消息上。
-      const quoted = index === 0 && quote;
       const segments = quoted ? [replySegment(target.messageId!), ...sent.segments] : sent.segments;
       const quoteOf = quoted ? { name: target.name, text: target.text, fromBot: false } : undefined;
       this.recordSent(session, await this.deps.client.sendMessage(session.target, segments), sent.text, quoteOf);
@@ -671,6 +678,70 @@ export class ChatRuntime {
   }
 
   /**
+   * 发送一条语音片段：按语速切成多片→逐片合成（失败重试一次）→发 record 段（失败重试一次）。
+   * 合成或发送在重试后仍失败时，该片退回纯文字发送；退文字失败不再兜底，冒泡到 process 记「处理失败」。
+   * 只发 record 段、不带 reply 引用：NapCat 会吞掉 record 段的转换异常而保留 reply 段，
+   * 一旦 QQ 接受「只有 reply 段」的消息就会假成功（用户没收到语音、我们却记了已发）。
+   */
+  private async sendVoice(
+    session: Session,
+    part: Extract<ReplyPart, { kind: "voice" }>,
+    members: Map<string, number>,
+  ): Promise<void> {
+    const pieces = planVoicePieces(part.text, config.voice.maxSeconds, config.voice.speed);
+    for (const [index, piece] of pieces.entries()) {
+      // 第 2 片起按文字长度估算打字间隔。
+      if (index > 0) await sleep(typingDelay({ kind: "text", text: piece }));
+      // 合成：失败重试一次，仍失败则该片退文字。
+      let audio: Buffer | undefined;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          audio = await synthesizeSpeech(piece, part.emotion);
+          break;
+        } catch (error) {
+          const message = (error as Error).message;
+          if (attempt === 1) {
+            logger.warn(`[voice] ${session.key} 语音合成失败，重试一次: ${message} :: ${piece.slice(0, 40)}`);
+            continue;
+          }
+          logger.error(`[voice] ${session.key} 语音合成失败（已重试）: ${message} :: ${piece.slice(0, 40)}`);
+          break;
+        }
+      }
+      // 发送：只发 record 段；失败重试一次，仍失败则该片退文字。
+      let sentId: number | undefined;
+      let sent = false;
+      if (audio) {
+        const segments: Segment[] = [
+          { type: "record", data: { file: `base64://${audio.toString("base64")}` } },
+        ];
+        for (let attempt = 1; ; attempt++) {
+          try {
+            sentId = await this.deps.client.sendMessage(session.target, segments);
+            sent = true;
+            break;
+          } catch (error) {
+            const message = (error as Error).message;
+            if (attempt === 1) {
+              logger.warn(`[voice] ${session.key} 语音发送失败，重试一次: ${message}`);
+              continue;
+            }
+            logger.error(`[voice] ${session.key} 语音发送失败（已重试）: ${message} :: ${piece.slice(0, 40)}`);
+            break;
+          }
+        }
+      }
+      if (sent) {
+        this.recordSent(session, sentId, `[语音：${piece}]`);
+        continue;
+      }
+      // 退文字：说明这是降级而非正常发送；此处失败不再兜底，交给 process 的「处理失败」。
+      logger.info(`[voice] ${session.key} 改发文字: ${piece.slice(0, 40)}`);
+      this.recordSent(session, await this.deps.client.sendMessage(session.target, textToSegments(piece, members)), piece);
+    }
+  }
+
+  /**
    * 记录「机器人发了一条消息」的副作用，但不写入会话历史：累计强制回复归零 + [send] 日志。
    * 供不需要进入模型上下文的消息复用（如 opencode 开场通知）。
    */
@@ -738,10 +809,11 @@ export class ChatRuntime {
 
   /**
    * 把回复片段转成可发送的消息段：文字经 textToSegments（真 @、QQ 小黄脸），表情包按编号查收藏。
+   * 语音片段不走这里（见 sendVoice），故参数收窄为 text/sticker。
    * @returns 表情包编号不存在时返回 undefined，调用方跳过该段并记警告。
    */
   private async toSegments(
-    part: ReplyPart,
+    part: Extract<ReplyPart, { kind: "text" | "sticker" }>,
     members: Map<string, number>,
   ): Promise<{ segments: Segment[]; text: string } | undefined> {
     if (part.kind === "text") return { segments: textToSegments(part.text, members), text: part.text };

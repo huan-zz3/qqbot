@@ -4,21 +4,25 @@
  * 输出约定（与提示词一一对应）：
  * - 模型每行是一条消息；单独一行 [表情包#编号] 表示发收藏的表情包；
  *   聊天记录里的 [表情包：描述] 只是展示文字，不可当发送语法（提示词已点明）。
+ * - 单独一行 [语音] / [语音:情绪] 表示把该行合成语音发出（VOICE_ENABLED 开启时）。
  * - 回复里写的 @名字 由发送层变成真 @（runtime.ts -> napcat/message.js textToSegments）。
  *
  * 发送规划（planSends）：短回复逐段（逐行）发；行数超过 forwardParts（默认 5）或总字数超过
  * forwardChars（默认 300）时，第一条文本一律单独发普通消息，从第二条起合并成一条转发；
- * 只有一条文本时不产生转发（该行直接发普通消息）。表情包始终作为普通消息排在转发之后。
+ * 只有一条文本时不产生转发（该行直接发普通消息）。表情包与语音始终作为普通消息排在转发之后。
  *
  * 关键约束：提示词只交代事实（聊天记录格式、可用表情包、是否挂了搜索），不写长度/语气规则、
  * 不给示例句——模型会照抄示例。模型复读自己最近结尾的问题由 dropRepeatedEndings 处理。
  */
 import { config } from "../config.js";
+import { logger } from "../logger.js";
 import { FACE_IDS } from "../napcat/faces.js";
 import { chatWithTools, type ChatMessage, type Tool, type ToolGroup } from "../llm/deepseek.js";
+import { supportsTags } from "../llm/tts.js";
 import type { OpenCodeAgent } from "../opencode/agent.js";
 import type { McpSearch } from "../search/mcp-search.js";
 import { formatLine, type ChatRecord, type Scope } from "./history.js";
+import { cleanSpokenText, takeVoiceMarker, type VoiceEmotion } from "./voice.js";
 
 /** generateReply 的输入：会话快照 + 给模型看的历史与可用素材。 */
 export type ReplyContext = {
@@ -36,14 +40,24 @@ export type ReplyContext = {
   materials?: string; // 本批压缩包解压清单（目录 + 文件清单 + 护栏）；空则不注入该段
 };
 
-/** 一条待发送的回复片段：普通文字，或某编号的收藏表情包。 */
-export type ReplyPart = { kind: "text"; text: string } | { kind: "sticker"; id: number };
+/** 一条待发送的回复片段：普通文字、某编号的收藏表情包，或要合成语音的文本。 */
+export type ReplyPart =
+  | { kind: "text"; text: string }
+  | { kind: "sticker"; id: number }
+  | { kind: "voice"; text: string; emotion?: VoiceEmotion };
 
 /** planSends 算出的发送计划：单个片段，或一整段合并转发。 */
 export type Outgoing = { kind: "part"; part: ReplyPart } | { kind: "forward"; text: string };
 
 // 匹配模型写的 [表情包#编号]。
 const STICKER_MARKER = /\[表情包#(\d+)\]/g;
+
+// 语音语气词标签（MiniMax 2.8 系列）；仅当后端支持时随提示词给出。
+const VOICE_TAG_LIST =
+  "(laughs) 笑声、(chuckle) 轻笑、(coughs) 咳嗽、(clear-throat) 清嗓子、(groans) 呻吟、(breath) 呼吸、" +
+  "(pant) 喘气、(inhale) 吸气、(exhale) 呼气、(gasps) 倒吸气、(sniffs) 抽鼻子、(sighs) 叹气、" +
+  "(snorts) 哼声、(burps) 打嗝、(lip-smacking) 咂嘴、(humming) 哼唱、(hissing) 嘶声、(emm) 嗯、(sneezes) 喷嚏";
+
 
 /** 把时间戳格式化为北京时间 HH:mm，用于聊天记录行首。 */
 function clock(time: number): string {
@@ -104,6 +118,12 @@ export function buildSystemPrompt(ctx: ReplyContext, toolNames: string[], search
     );
     for (const sticker of ctx.stickers) lines.push(`#${sticker.id} ${sticker.description}`);
   }
+  if (config.voice.enabled) {
+    // 语音标记说明：来自 config.voice.prompt（env 可覆盖）。
+    lines.push("", config.voice.prompt);
+    // 语气词标签只在后端支持时给出，否则模型可能写出无效标签。
+    if (supportsTags()) lines.push(`可以在语音文本里写语气词标签：${VOICE_TAG_LIST}`);
+  }
   return lines.join("\n");
 }
 
@@ -125,7 +145,8 @@ export function buildTranscript(ctx: ReplyContext): string {
 
 /**
  * 解析模型原始输出为回复片段。
- * 步骤：去掉 Markdown 装饰 → 逐行切分 → 行内把 [表情包#编号] 拆成 sticker 片段。
+ * 步骤：去掉 Markdown 装饰 → 逐行切分 → 命中语音标记的整行转成 voice 片段，
+ * 其余行行内把 [表情包#编号] 拆成 sticker 片段。
  * @returns 无有效内容（纯空白输出）时返回空数组（上层按异常处理、不发送）；最多取 config.reply.maxParts 段。
  */
 export function postProcess(raw: string, botName: string): ReplyPart[] {
@@ -140,6 +161,19 @@ export function postProcess(raw: string, botName: string): ReplyPart[] {
   const parts: ReplyPart[] = [];
   for (const rawLine of text.split(/\n+/)) {
     const line = rawLine.replace(prefix, "");
+    if (config.voice.enabled) {
+      const voice = takeVoiceMarker(line);
+      if (voice) {
+        // 命中语音标记的整行都是语音：不再切出表情包标记。
+        // 该行里的表情包标记会被丢弃（不念也不发），留日志便于排查模型混写。
+        const dropped = voice.text.match(/\[表情包#\d+\]/);
+        if (dropped) logger.warn(`语音行里的表情包标记被丢弃: ${dropped[0]} :: ${voice.text.slice(0, 40)}`);
+        const spoken = cleanSpokenText(voice.text);
+        if (spoken) parts.push({ kind: "voice", text: spoken, emotion: voice.emotion });
+        else logger.warn("语音标记后没有可念的文本，跳过该行");
+        continue;
+      }
+    }
     let cursor = 0;
     // 一行里可能有多个表情包标记，按游标切出中间的文字片段。
     for (const match of line.matchAll(STICKER_MARKER)) {
@@ -194,7 +228,7 @@ export function dropRepeatedEndings(parts: ReplyPart[], recentBotTexts: string[]
 /**
  * 规划发送方式：短回复逐段（逐行）发出；长回复（行数 > forwardParts 或字数 > forwardChars）
  * 第一条文本一律单独发普通消息，从第二条起合并成一条转发；只有一条文本时该行直接发普通消息。
- * 表情包始终作为普通消息排在转发之后。
+ * 表情包与语音始终作为独立普通消息排在转发之后（语音不带引用，见 runtime.ts 的 sendVoice）。
  */
 export function planSends(parts: ReplyPart[]): Outgoing[] {
   const texts = parts.filter((part): part is Extract<ReplyPart, { kind: "text" }> => part.kind === "text");
@@ -208,7 +242,7 @@ export function planSends(parts: ReplyPart[]): Outgoing[] {
   const body = texts.slice(1);
   // 从第二条起才合并；只有一条文本时没有可合并的内容，不再产生转发项。
   if (body.length > 0) plan.push({ kind: "forward", text: body.map((part) => part.text).join("\n") });
-  for (const part of parts) if (part.kind === "sticker") plan.push({ kind: "part", part });
+  for (const part of parts) if (part.kind === "sticker" || part.kind === "voice") plan.push({ kind: "part", part });
   return plan;
 }
 
