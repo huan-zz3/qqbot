@@ -322,6 +322,9 @@ async function main(): Promise<void> {
     }
     clientFiles = files;
   }
+  if (agentClient && !opencode) {
+    logger.warn("agent-client 已启用但 opencode 未启用：客户端压缩包能发给群友，但模型没有 opencode 工具，配对码无处可用。");
+  }
 
   // 压缩包物料化：启用且配了物料化时，各上限必须为正、目录非空，否则启动即报错退出（不静默失效）。
   if (config.files.enabled && config.files.materialize) {

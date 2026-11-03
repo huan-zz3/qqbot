@@ -19,11 +19,14 @@ process.env.REPLY_MAX_PARTS = "3";
 process.env.REPLY_MAX_CHARS = "20";
 process.env.REPLY_FORWARD_PARTS = "2";
 process.env.REPLY_FORWARD_CHARS = "30";
+// send_client 说明段来自 AGENT_CLIENT_PROMPT（config 在 import 时固化），先固定一个可断言的文本。
+process.env.AGENT_CLIENT_PROMPT = "远程排查客户端说明（测试用）。";
 
 // 动态 import：让上面的 env 先于 config.ts 读取（静态 import 会被提升到赋值之前）。
 const { postProcess, buildTranscript, buildSystemPrompt, planSends, dropRepeatedEndings } = await import(
   "../src/chat/reply.js"
 );
+const { config } = await import("../src/config.js");
 
 // 简写构造文本回复段（ReplyPart 的 text 形态）。
 const text = (value: string) => ({ kind: "text", text: value });
@@ -81,6 +84,26 @@ test("system prompt lists stickers without prescribing style", () => {
   assert.doesNotMatch(buildSystemPrompt({ ...ctx, stickers: [], memories: [] }, []), /表情包#|联网搜索|opencode|记得/);
   // 代码不再定死「怎么回/说多少/语气由你判断」这类行为授权。
   assert.doesNotMatch(prompt, /都由你自己判断/);
+});
+
+// 客户端分发说明只在挂了 send_client 时才出现；文案来自 config.agentClient.prompt（env 可覆盖）。
+test("system prompt explains send_client only when the tool is mounted", () => {
+  const ctx = {
+    scope: "group" as const,
+    sessionLabel: "测试群",
+    botName: "小猫",
+    personaIdentity: "",
+    personaRules: "",
+    records: [],
+    pending: new Set<never>(),
+    stickers: [],
+    memories: [],
+    now: Date.now(),
+  };
+  const withTool = buildSystemPrompt(ctx, ["send_client"]);
+  assert.match(withTool, /远程排查客户端说明（测试用）。/);
+  assert.ok(withTool.includes(config.agentClient.prompt));
+  assert.doesNotMatch(buildSystemPrompt(ctx, ["opencode"]), /远程排查客户端说明（测试用）。/);
 });
 
 // 身份与准则分层：准则独立成段原样注入；身份为空时身份句以句号收尾、不产生悬挂标点；

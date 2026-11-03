@@ -108,6 +108,10 @@ export function buildSystemPrompt(ctx: ReplyContext, toolNames: string[], search
     lines.push(config.opencode.prompt);
     if (ctx.filesEnabled) lines.push(config.files.readPrompt);
   }
+  if (toolNames.includes("send_client")) {
+    // 客户端分发说明：来自 config.agentClient.prompt（env 可覆盖）；没有这个工具就不提，避免模型空谈。
+    lines.push("", config.agentClient.prompt);
+  }
   if (ctx.stickers.length > 0) {
     // 编号清单与 postProcess 的 [表情包#编号] 解析一一对应。
     // 额外点明聊天记录里的 [表情包：…] 只是展示文字：历史里 bot 自己发过的表情包
