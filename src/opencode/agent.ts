@@ -32,6 +32,7 @@ import { Readable, Writable } from "node:stream";
 
 import * as acp from "@agentclientprotocol/sdk";
 
+import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { childEnv } from "./env.js";
 import { resolveDir, type DirEntry } from "./dirs.js";
@@ -98,12 +99,21 @@ export class OpenCodeAgent {
    * @param key 会话键（群号 / 私聊用户号）；非空，用于按会话串行。
    * @param additionalDirectories 额外授权的绝对路径目录（如解压出来的压缩包目录）；
    *   在 session/new 时声明，让 OpenCode 能读工作区之外的这些目录。
+   * @param pairing 群友客户端的配对码；给出时注入远程 MCP server 并抬高空闲超时。
    * @returns 任务结束时 OpenCode 的文本答复（可能为空或已截断）；失败时抛出。
    */
-  run(prompt: string, directory: string, key: string, additionalDirectories: string[] = []): Promise<string> {
+  run(
+    prompt: string,
+    directory: string,
+    key: string,
+    additionalDirectories: string[] = [],
+    pairing?: string,
+  ): Promise<string> {
     // 记下入队时刻，真正开始时用于报告排队等待了多久（不含任务本身耗时）。
     const queuedAt = Date.now();
-    return this.scheduler.run(key, () => this.execute(prompt, directory, key, additionalDirectories, queuedAt));
+    return this.scheduler.run(key, () =>
+      this.execute(prompt, directory, key, additionalDirectories, queuedAt, pairing),
+    );
   }
 
   /** 杀掉当前存活的所有子进程；进程退出时调用，避免留下孤儿。 */
@@ -131,8 +141,28 @@ export class OpenCodeAgent {
     key: string,
     additionalDirectories: string[],
     queuedAt: number,
+    pairing?: string,
   ): Promise<string> {
-    const { command, args, dirs, timeoutMs, idleTimeoutMs, retryMax, maxOutputChars } = this.options;
+    const {
+      command,
+      args,
+      dirs,
+      timeoutMs: configuredTimeoutMs,
+      idleTimeoutMs: configuredIdleMs,
+      retryMax,
+      maxOutputChars,
+    } = this.options;
+    // 带配对码的任务：一条远程 psh 可能跑满 agentClient.callTimeoutMs 且期间没有任何 update，
+    // 按配置的空闲阈值会被误判卡死；只向上取，不带配对码的任务一字不变。
+    const idleTimeoutMs = pairing
+      ? Math.max(configuredIdleMs, config.agentClient.callTimeoutMs + 60000)
+      : configuredIdleMs;
+    // 总墙钟同理要抬：一次远程排查正常会有几次 psh/读文件来回，每次都可能是接近
+    // callTimeoutMs 的远程调用，按原值（默认 180s）会在第二次调用前后就撞上总超时、只报「总超时」。
+    // 预算按 3 次调用 + 1 分钟余量估；同样只向上取，不带配对码时用原值。
+    const timeoutMs = pairing
+      ? Math.max(configuredTimeoutMs, config.agentClient.callTimeoutMs * 3 + 60000)
+      : configuredTimeoutMs;
     const cwd = resolveDir(dirs, directory);
     const startedAt = Date.now();
     // 用户自定义的前/后置文本在此统一拼进送进 acp 的 prompt；空则整段消失（见 prompt.ts）。
@@ -142,10 +172,10 @@ export class OpenCodeAgent {
     // 开始日志带上会话键、排队等待时长与调度器当时的状态（运行/等待数含本次自身）。
     logger.info(
       `[opencode] 开始 会话=${key} 等待=${startedAt - queuedAt}ms 运行=${this.scheduler.active} 排队=${this.scheduler.waiting} ` +
-        `目录=${directory}(${cwd}) 附加目录=${additionalDirectories.length} prompt=${summarize(finalPrompt)} 前置=${prefix.trim().length} 后置=${suffix.trim().length} 字符`,
+        `目录=${directory}(${cwd}) 附加目录=${additionalDirectories.length}${pairing ? " 配对码=已注入" : ""} prompt=${summarize(finalPrompt)} 前置=${prefix.trim().length} 后置=${suffix.trim().length} 字符`,
     );
 
-    const child = spawn(command, args, { cwd, env: childEnv(), stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, { cwd, env: childEnv(undefined, pairing), stdio: ["pipe", "pipe", "pipe"] });
     this.children.add(child);
 
     // 收集 stderr（截尾保留最近 4000 字符），失败时附到错误信息里。

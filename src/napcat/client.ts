@@ -6,7 +6,7 @@
  *   超时或连接断开时 reject；
  * - 事件派发：onRaw 解析入站 JSON——带 echo 的是 action 响应，带 post_type 的是事件，
  *   事件交给构造时传入的 onEvent 回调；
- * - 发送节流：发送类方法（sendMessage/sendForward）全部经 enqueue 串行化并保持最小间隔，
+ * - 发送节流：发送类方法（sendMessage/sendForward/sendFile）全部经 enqueue 串行化并保持最小间隔，
  *   避免回复分条连发触发 QQ 风控；callAction 本身不经过节流。
  * 依赖 config.napcat（url/token/超时/间隔）与 logger。
  */
@@ -26,6 +26,13 @@ type Pending = {
   timer: NodeJS.Timeout;
   action: string;
 };
+
+/**
+ * 文件上传专用超时（2 分钟）。
+ * 不能沿用 callAction 的全局 15s：upload_*_file 的 file 是 URL，NapCat 要先把几 MB 的客户端压缩包
+ * 从本机下载完再传给 QQ，15s 对慢链路/大文件必然不够，而失败只是「超时」看不出真实原因。
+ */
+const FILE_UPLOAD_TIMEOUT_MS = 120_000;
 
 /** 发送目标：群聊给 groupId、私聊给 userId，两者恰有其一（用可选 undefined 构成互斥联合）。 */
 export type SendTarget = { groupId: number; userId?: undefined } | { userId: number; groupId?: undefined };
@@ -108,13 +115,18 @@ export class NapcatClient {
   /**
    * 调用一个 OneBot action 并等待响应。
    * 机制：为本次调用生成随机 echo，把结算函数登记进 pending；onRaw 收到同 echo 的响应后结算；
-   * 超时（config.napcat.actionTimeoutMs）或连接断开（failPending）时以 reject 结束。
+   * 超时（默认 config.napcat.actionTimeoutMs）或连接断开（failPending）时以 reject 结束。
    * 失败的错误对象上带 retcode 字段，供调用方区分可恢复错误。
    * @param action OneBot action 名，如 send_group_msg / get_login_info
    * @param params action 参数
+   * @param timeoutMs 本次调用的超时；只给慢 action（如文件上传）单独放宽，其余沿用全局值
    * @returns 完整响应（含 status/retcode/data）
    */
-  callAction<T = unknown>(action: string, params: Record<string, unknown> = {}): Promise<ActionResponse<T>> {
+  callAction<T = unknown>(
+    action: string,
+    params: Record<string, unknown> = {},
+    timeoutMs: number = config.napcat.actionTimeoutMs,
+  ): Promise<ActionResponse<T>> {
     const ws = this.ws;
     // 未连接（含重连间隙）直接失败，不排队等待。
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -126,7 +138,7 @@ export class NapcatClient {
       const timer = setTimeout(() => {
         this.pending.delete(echo);
         reject(new Error(`action ${action} 超时`));
-      }, config.napcat.actionTimeoutMs);
+      }, timeoutMs);
       // 登记在途调用；action 名只用于错误信息与日志。
       this.pending.set(echo, {
         resolve: resolve as (response: ActionResponse) => void,
@@ -154,7 +166,7 @@ export class NapcatClient {
       target.groupId !== undefined
         ? this.callAction<{ message_id: number }>("send_group_msg", { group_id: target.groupId, message })
         : this.callAction<{ message_id: number }>("send_private_msg", { user_id: target.userId, message }),
-    );
+    ).then((data) => data?.message_id);
   }
 
   /**
@@ -166,7 +178,25 @@ export class NapcatClient {
       target.groupId !== undefined
         ? this.callAction<{ message_id: number }>("send_group_forward_msg", { group_id: target.groupId, messages: nodes })
         : this.callAction<{ message_id: number }>("send_private_forward_msg", { user_id: target.userId, messages: nodes }),
-    );
+    ).then((data) => data?.message_id);
+  }
+
+  /** 发送文件：file 传 http(s) URL，由 NapCat 自己下载（容器内看不到宿主路径）。 */
+  sendFile(target: SendTarget, url: string, name: string): Promise<void> {
+    return this.enqueue(
+      () =>
+        target.groupId !== undefined
+          ? this.callAction(
+              "upload_group_file",
+              { group_id: target.groupId, file: url, name, upload_file: true },
+              FILE_UPLOAD_TIMEOUT_MS,
+            )
+          : this.callAction(
+              "upload_private_file",
+              { user_id: target.userId, file: url, name, upload_file: true },
+              FILE_UPLOAD_TIMEOUT_MS,
+            ),
+    ).then(() => undefined);
   }
 
   /** 撤回一条消息；超过 QQ 的时限或消息不在缓存中时会被拒绝（reject）。 */
@@ -185,17 +215,16 @@ export class NapcatClient {
    * 把一次发送挂到串行链尾：保证与上一发至少间隔 config.napcat.sendIntervalMs，
    * 回复分条连发时不会短时间打出多条消息触发 QQ 风控。
    * @param send 实际发送动作（callAction 的调用）
-   * @returns 该次发送的 message_id（取不到时为 undefined）
+   * @returns 该次发送的响应 data（泛型由调用方按 action 决定）
    */
-  private enqueue(send: () => Promise<ActionResponse<{ message_id: number }>>): Promise<number | undefined> {
+  private enqueue<T>(send: () => Promise<ActionResponse<T>>): Promise<T> {
     const task = this.sendChain.then(async () => {
       // 距「上一发 + 最小间隔」还差多少毫秒；为正才需要等待。
       const wait = this.lastSendAt + config.napcat.sendIntervalMs - Date.now();
       if (wait > 0) await sleep(wait);
       // 发起前记录时间戳，保证下一发的间隔从这里算起。
       this.lastSendAt = Date.now();
-      // 统一从响应 data 里取 message_id；响应缺 data 时为 undefined。
-      return (await send()).data?.message_id;
+      return (await send()).data;
     });
     // 链尾吞掉异常：单条发送失败不会让后续发送被连锁阻断。
     this.sendChain = task.catch(() => undefined);

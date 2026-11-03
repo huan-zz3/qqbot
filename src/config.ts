@@ -302,6 +302,36 @@ export const config = {
     // opencode 组的工具轮数上限；与联网搜索组各自独立计数。
     maxToolRounds: num("OPENCODE_MAX_TOOL_ROUNDS", 3),
   },
+  // 远程 Agent 客户端（Windows 单文件 exe）：群友运行后拿 8 位配对码，opencode 经本机 MCP
+  // 在对方机器上跑 PowerShell、读文件。启用时各项校验见 index.ts（端口/PSK/压缩包/endpoint）。
+  // 传输是裸 TCP + 应用层 AES-GCM；MCP 与静态文件服务只监听本机/容器网桥地址。
+  agentClient: {
+    enabled: bool("AGENT_CLIENT_ENABLED", false),
+    // 客户端入口绑定地址（frp 转发到公网时改成对应网卡/0.0.0.0）。
+    host: str("AGENT_CLIENT_HOST", "127.0.0.1"),
+    port: num("AGENT_CLIENT_PORT", 7801),
+    // opencode 连的 MCP 端口，服务端固定绑 127.0.0.1。
+    mcpPort: num("AGENT_CLIENT_MCP_PORT", 7802),
+    // 32 字节 hex（64 个字符），与构建进 exe 的 PSK 一致；日志里永不打印。
+    psk: str("AGENT_CLIENT_PSK"),
+    // 断线后配对码保留的宽限期：期间可兑付但立即提示「重连中」，超时才注销。
+    graceMs: num("AGENT_CLIENT_CODE_GRACE_MS", 60000),
+    // 同时在线客户端上限，超出直接拒绝握手。
+    maxClients: num("AGENT_CLIENT_MAX_CLIENTS", 3),
+    // 服务端一次工具调用的超时，必须大于 pshTimeoutMs（否则服务端先超时、客户端还在跑）。
+    callTimeoutMs: num("AGENT_CLIENT_CALL_TIMEOUT_MS", 90000),
+    // 客户端本地 psh 的超时（仅用于校验两者关系，实际执行在 Go 侧）。
+    pshTimeoutMs: num("AGENT_CLIENT_PSH_TIMEOUT_MS", 60000),
+    // 服务端二次截断工具输出的字符上限。
+    maxOutputChars: num("AGENT_CLIENT_MAX_OUTPUT_CHARS", 20000),
+    // 发给群友的客户端压缩包（绝对路径）。
+    file: str("AGENT_CLIENT_FILE"),
+    // 给 NapCat 容器下载压缩包用的本机地址（宿主机网桥 IP）。
+    fileHost: str("AGENT_CLIENT_FILE_HOST", "172.26.0.1"),
+    filePort: num("AGENT_CLIENT_FILE_PORT", 7803),
+    // 构建进 exe 的入口地址，形如 tcp://host:port；仅用于启动校验与文档。
+    endpoint: str("AGENT_CLIENT_ENDPOINT"),
+  },
   // 表情包收藏与识图描述。
   stickers: {
     // 总开关：关掉则整个表情包功能停用（不建库、不展示、不发送）。
@@ -451,3 +481,6 @@ export const config = {
 
 /** 整个配置对象的类型；需要传递配置引用时用它。 */
 export type Config = typeof config;
+
+/** agent-client 配置段的类型；供接线与测试按需引用。 */
+export type AgentClientConfig = typeof config.agentClient;

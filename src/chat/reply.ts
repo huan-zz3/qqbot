@@ -14,6 +14,7 @@
  * 关键约束：提示词只交代事实（聊天记录格式、可用表情包、是否挂了搜索），不写长度/语气规则、
  * 不给示例句——模型会照抄示例。模型复读自己最近结尾的问题由 dropRepeatedEndings 处理。
  */
+import type { AgentClient } from "../agent-client/types.js";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { FACE_IDS } from "../napcat/faces.js";
@@ -251,19 +252,30 @@ export function planSends(parts: ReplyPart[]): Outgoing[] {
  * @param agent OpenCode 客户端；其预定义目录清单用于生成 directory 参数的 enum 与描述。
  * @param key 会话键（群号 / 私聊用户号）；透传给后端，用于按会话串行（同一会话不并发）。
  * @param options.dirs 本次额外授权的绝对路径目录（如本批压缩包的解压目录）；作为 additionalDirectories 声明。
+ * @param options.client agent-client 后端；给出时才向模型暴露 `client`（配对码）参数。
  * @param options.onStart 可选的“开始执行”通知；本次工具实例首次真正调用时触发一次（同批多次调用也只触发一次）。
  *   契约：它必须自行处理失败、不得抛出——否则会把探索流程一并中断。
  */
 export function openCodeTool(
   agent: OpenCodeAgent,
   key: string,
-  options: { dirs?: string[]; onStart?: () => void | Promise<void> } = {},
+  options: { dirs?: string[]; client?: AgentClient; onStart?: () => void | Promise<void> } = {},
 ): Tool {
   // 只属于本次工具实例的标记：保证同一批只通知一次。
   let notified = false;
   // 预定义仓库短名：用于向模型列出可选目录，并在调用时校验（只允许这几个）。
   const names = agent.directories().map((dir) => dir.name);
   const nameList = names.join("、");
+  // 配对码参数只在 agent-client 可用时出现：没这个功能就不要提示模型去要码。
+  const pairCode = options.client
+    ? {
+        client: {
+          type: "string",
+          description:
+            "群友客户端窗口显示的 8 位配对码。只有当群友本次提供了配对码时才填；没有就不要填。",
+        },
+      }
+    : {};
   return {
     definition: {
       type: "function",
@@ -281,6 +293,7 @@ export function openCodeTool(
               enum: names,
               description: `要进入的仓库短名，取值：${nameList}`,
             },
+            ...pairCode,
           },
           required: ["prompt", "directory"],
         },
@@ -295,22 +308,55 @@ export function openCodeTool(
       if (!names.includes(directory)) {
         return `directory 必须是以下之一：${nameList}${directory ? `（收到：${directory}）` : ""}`;
       }
+      // 配对码：给了就必须能兑付，否则原样把错误文本交给模型——绝不退化成「本地跑一次 opencode」。
+      const code = typeof args.client === "string" ? args.client.trim() : "";
+      if (code) {
+        const resolved = options.client?.resolveForOpencode(code);
+        if (!resolved) return "配对码功能未启用，不能使用 client 参数";
+        if (!resolved.ok) return resolved.message;
+      }
       // 探索即将开始：先通知（仅首次）。
       if (options.onStart && !notified) {
         notified = true;
         await options.onStart();
       }
       // 额外授权目录随本次调用透传：opencode 会在 session/new 时声明，从而能读解压目录。
-      return agent.run(prompt, directory, key, options.dirs ?? []);
+      return agent.run(prompt, directory, key, options.dirs ?? [], code || undefined);
     },
   };
 }
 
-/** generateReply 可用的后端：MCP 联网搜索与只读 OpenCode，均为可选。 */
+/**
+ * 构造挂给模型的 send_client 工具：把远程排查用的 Windows 客户端压缩包发到当前会话。
+ * 发送本身由 runtime 注入（用当前会话的 target 调 NapCat 上传），这里只负责调用与回传文本；
+ * 失败时抛出，由工具循环转成给模型的错误文本（runTool 已统一处理）。
+ * @param options.fileName 压缩包文件名，用于描述里说明发的是什么。
+ * @param options.send 实际发送动作；返回一段给模型看的说明文本。
+ */
+export function sendClientTool(options: { fileName: string; send: () => Promise<string> }): Tool {
+  return {
+    definition: {
+      type: "function",
+      function: {
+        name: "send_client",
+        description:
+          `把远程排查用的 Windows 客户端压缩包（${options.fileName}）发给当前会话。` +
+          `仅当群友明确索要客户端/问怎么配合排查时调用。`,
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    handler: async () => options.send(),
+  };
+}
+
+/** generateReply 可用的后端：MCP 联网搜索、只读 OpenCode 与客户端分发，均为可选。 */
 export type ReplyTools = {
   search?: McpSearch;
   // 只读 OpenCode 后端、会话键与额外授权目录成对提供：键不可能缺失（避免静默退化为跨会话共享队列）。
-  opencode?: { agent: OpenCodeAgent; key: string; dirs?: string[] };
+  // client 仅在 agent-client 启用时给出：给出才会向模型暴露配对码参数。
+  opencode?: { agent: OpenCodeAgent; key: string; dirs?: string[]; client?: AgentClient };
+  // send_client 的发送动作；fileName 仅用于工具描述。
+  sendClient?: { fileName: string; send: () => Promise<string> };
   // opencode 开始执行时的一次性通知（如“正在查看”）；缺省表示不发。
   onOpencodeStart?: () => void | Promise<void>;
 };
@@ -339,10 +385,21 @@ export async function generateReply(ctx: ReplyContext, backends: ReplyTools): Pr
       tools: [
         openCodeTool(backends.opencode.agent, backends.opencode.key, {
           dirs: backends.opencode.dirs,
+          client: backends.opencode.client,
           onStart: backends.onOpencodeStart,
         }),
       ],
       maxRounds: config.opencode.maxToolRounds,
+    });
+  }
+  // 客户端分发独立成组：发文件是一次性动作，不该占用 opencode 的排查轮数，
+  // 也不该依赖 OPENCODE_ENABLED（opencode 关掉时它仍需可用）。
+  if (backends.sendClient) {
+    groups.push({
+      name: "agent-client",
+      label: "客户端分发",
+      tools: [sendClientTool(backends.sendClient)],
+      maxRounds: 1,
     });
   }
   const toolNames = groups.flatMap((group) => group.tools.map((tool) => tool.definition.function.name));

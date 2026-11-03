@@ -41,6 +41,7 @@ import {
   toSegments,
 } from "../napcat/message.js";
 import type { MessageEvent, Segment } from "../napcat/types.js";
+import type { AgentClient } from "../agent-client/types.js";
 import type { OpenCodeAgent } from "../opencode/agent.js";
 import type { McpSearch } from "../search/mcp-search.js";
 import { archiveKindOf, type ArchiveRequest } from "./archive.js";
@@ -79,10 +80,12 @@ type Session = {
  * power 缺失时视为始终运行（没有开关可切）。
  */
 export type RuntimeDeps = {
-  client: Pick<NapcatClient, "selfId" | "sendMessage" | "sendForward" | "callAction">; // NapCat 客户端能力集
+  client: Pick<NapcatClient, "selfId" | "sendMessage" | "sendForward" | "sendFile" | "callAction">; // NapCat 客户端能力集
   decider: Decider | undefined; // decider 判定器；未配置 DECIDER_API_KEY 时为 undefined
   search: McpSearch | undefined; // MCP 联网搜索
   opencode: OpenCodeAgent | undefined; // 只读 OpenCode（ACP）能力
+  // 群友远程客户端（配对码 + 客户端压缩包分发）；未启用时为 undefined。
+  agentClient?: AgentClient | undefined;
   stickers: StickerStore | undefined; // 表情包收藏
   images?: ImageDescriber | undefined; // 普通图片识图
   materials?: Materials | undefined; // 压缩包物料化（下载解压 + 清理）；缺少则不解压
@@ -510,6 +513,8 @@ export class ChatRuntime {
       archives.length > 0 ? await this.deps.materials!.materialize(archives) : { text: "", dirs: [] };
     // 配了提示文本时，opencode 开始执行前先发一条；未配置则不传回调，行为与原来一致。
     const onOpencodeStart = config.opencode.notice ? () => this.sendOpencodeNotice(session) : undefined;
+    // 群友远程客户端（配对码 + 客户端压缩包）：未启用时为 undefined，工具层据此不暴露配对码参数。
+    const agentClient = this.deps.agentClient;
     const generated = await generateReply(
       {
         scope: session.scope,
@@ -528,7 +533,22 @@ export class ChatRuntime {
       {
         search,
         opencode: this.deps.opencode
-          ? { agent: this.deps.opencode, key: session.key, dirs: materials.dirs }
+          ? {
+              agent: this.deps.opencode,
+              key: session.key,
+              dirs: materials.dirs,
+              client: agentClient,
+            }
+          : undefined,
+        sendClient: agentClient
+          ? {
+              fileName: agentClient.fileName(),
+              // 发到当前会话：群聊与私聊用同一个 target，NapCat 侧按 target 选上传接口。
+              send: async () => {
+                await this.deps.client.sendFile(session.target, agentClient.fileUrl(), agentClient.fileName());
+                return `已把 ${agentClient.fileName()} 发到当前会话。等对方解压运行、把窗口里显示的 8 位配对码发来，再把这个码作为 opencode 的 client 参数去查看那台机器。`;
+              },
+            }
           : undefined,
         onOpencodeStart,
       },

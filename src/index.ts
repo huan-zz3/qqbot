@@ -8,6 +8,10 @@
  * 组件按需创建：配置关闭或初始化失败时对应依赖为 undefined，各模块自行降级
  * （例如无 decider 时 gate 走兜底判定、搜索不可用时不给模型挂搜索工具）。
  */
+import { statSync } from "node:fs";
+
+import { ClientFileServer } from "./agent-client/file-server.js";
+import { AgentClientServer } from "./agent-client/server.js";
 import { config } from "./config.js";
 import { ChatRuntime, MEDIA_WAIT_MS } from "./chat/runtime.js";
 import { extractRar } from "./chat/extract-rar.js";
@@ -20,6 +24,7 @@ import { PowerSwitch } from "./chat/power.js";
 import { StickerStore, describeSticker } from "./chat/stickers.js";
 import { VOICE_EMOTIONS } from "./chat/voice.js";
 import { createDecider, type Decider } from "./decider/client.js";
+import { errorText } from "./errors.js";
 import { CronExecutor } from "./exec/cron-exec.js";
 import { DEEPSEEK_MODEL, completeJson } from "./llm/deepseek.js";
 import { VISION_MODEL, describeImage } from "./llm/vision.js";
@@ -210,6 +215,114 @@ async function main(): Promise<void> {
     });
   }
 
+  // 远程 Agent 客户端：启用时逐项校验，任一不过即退出（不静默失效）。端口、PSK 形状、
+  // 压缩包存在性、超时预算与 endpoint 形状都必须自洽，否则表现为「opencode 调不到工具」或启动才炸。
+  let agentClient: AgentClientServer | undefined;
+  let clientFiles: ClientFileServer | undefined;
+  if (config.agentClient.enabled) {
+    const ports: [string, number][] = [
+      ["AGENT_CLIENT_PORT", config.agentClient.port],
+      ["AGENT_CLIENT_MCP_PORT", config.agentClient.mcpPort],
+      ["AGENT_CLIENT_FILE_PORT", config.agentClient.filePort],
+    ];
+    for (const [name, value] of ports) {
+      if (!Number.isInteger(value) || value < 1 || value > 65535) {
+        logger.error(`${name} 必须是 1..65535 的整数（当前 ${value}）`);
+        process.exit(1);
+      }
+    }
+    if (new Set(ports.map(([, value]) => value)).size !== ports.length) {
+      logger.error(
+        `AGENT_CLIENT_PORT / AGENT_CLIENT_MCP_PORT / AGENT_CLIENT_FILE_PORT 不能相同（当前 ${ports
+          .map(([, value]) => value)
+          .join(" / ")}）`,
+      );
+      process.exit(1);
+    }
+    if (!/^[0-9a-fA-F]{64}$/.test(config.agentClient.psk)) {
+      logger.error("AGENT_CLIENT_PSK 必须是 64 个 hex 字符（32 字节）");
+      process.exit(1);
+    }
+    const positives: [string, number][] = [
+      ["AGENT_CLIENT_CODE_GRACE_MS", config.agentClient.graceMs],
+      ["AGENT_CLIENT_MAX_CLIENTS", config.agentClient.maxClients],
+      ["AGENT_CLIENT_CALL_TIMEOUT_MS", config.agentClient.callTimeoutMs],
+      ["AGENT_CLIENT_PSH_TIMEOUT_MS", config.agentClient.pshTimeoutMs],
+      ["AGENT_CLIENT_MAX_OUTPUT_CHARS", config.agentClient.maxOutputChars],
+    ];
+    for (const [name, value] of positives) {
+      if (!Number.isInteger(value) || value <= 0) {
+        logger.error(`${name} 必须是正整数（当前 ${value}）`);
+        process.exit(1);
+      }
+    }
+    // 服务端调用超时必须大于客户端 psh 超时，否则服务端先放弃、客户端还在跑那条命令。
+    if (config.agentClient.pshTimeoutMs >= config.agentClient.callTimeoutMs) {
+      logger.error(
+        `AGENT_CLIENT_PSH_TIMEOUT_MS（当前 ${config.agentClient.pshTimeoutMs}）必须小于 AGENT_CLIENT_CALL_TIMEOUT_MS（当前 ${config.agentClient.callTimeoutMs}）`,
+      );
+      process.exit(1);
+    }
+    if (!config.agentClient.file) {
+      logger.error("AGENT_CLIENT_ENABLED=true 但 AGENT_CLIENT_FILE 为空（客户端压缩包路径）");
+      process.exit(1);
+    }
+    try {
+      if (!statSync(config.agentClient.file).isFile()) {
+        logger.error(`AGENT_CLIENT_FILE 不是文件：${config.agentClient.file}`);
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(`AGENT_CLIENT_FILE 指向的客户端压缩包不存在：${config.agentClient.file}（${errorText(error)}）`);
+      process.exit(1);
+    }
+    const endpoint = /^tcp:\/\/([^\s/:]+):(\d+)$/.exec(config.agentClient.endpoint);
+    if (!endpoint) {
+      logger.error(`AGENT_CLIENT_ENDPOINT 必须形如 tcp://host:port（当前 ${config.agentClient.endpoint || "空"}）`);
+      process.exit(1);
+    }
+    const endpointPort = Number(endpoint[2]);
+    if (!Number.isInteger(endpointPort) || endpointPort < 1 || endpointPort > 65535) {
+      logger.error(`AGENT_CLIENT_ENDPOINT 的端口必须是 1..65535（当前 ${String(endpoint[2])}）`);
+      process.exit(1);
+    }
+
+    const server = new AgentClientServer({
+      host: config.agentClient.host,
+      port: config.agentClient.port,
+      mcpPort: config.agentClient.mcpPort,
+      psk: Buffer.from(config.agentClient.psk, "hex"),
+      graceMs: config.agentClient.graceMs,
+      maxClients: config.agentClient.maxClients,
+      callTimeoutMs: config.agentClient.callTimeoutMs,
+      pshTimeoutMs: config.agentClient.pshTimeoutMs,
+      maxOutputChars: config.agentClient.maxOutputChars,
+      fileHost: config.agentClient.fileHost,
+      filePort: config.agentClient.filePort,
+      file: config.agentClient.file,
+    });
+    try {
+      await server.start();
+    } catch (error) {
+      logger.error(`agent-client 启动失败：${errorText(error)}`);
+      process.exit(1);
+    }
+    agentClient = server;
+
+    const files = new ClientFileServer({
+      host: config.agentClient.fileHost,
+      port: config.agentClient.filePort,
+      file: config.agentClient.file,
+    });
+    try {
+      await files.start();
+    } catch (error) {
+      logger.error(`agent-client 文件服务启动失败：${errorText(error)}`);
+      process.exit(1);
+    }
+    clientFiles = files;
+  }
+
   // 压缩包物料化：启用且配了物料化时，各上限必须为正、目录非空，否则启动即报错退出（不静默失效）。
   if (config.files.enabled && config.files.materialize) {
     if (!config.files.dir) {
@@ -309,7 +422,7 @@ async function main(): Promise<void> {
         )
       : undefined;
   materials?.start();
-  runtime = new ChatRuntime({ client, decider, search, opencode, stickers, images, materials, memory, power, handoff });
+  runtime = new ChatRuntime({ client, decider, search, opencode, agentClient, stickers, images, materials, memory, power, handoff });
   // 群管理依赖 decider；启用了却没有 decider 时明确告警，而不是静默失效。
   if (config.moderation.enabled) {
     if (decider) moderation = new Moderation({ client, decider, power, handoff });
@@ -455,7 +568,7 @@ async function main(): Promise<void> {
     [config.opencode.inputPrefix && "pre", config.opencode.inputSuffix && "suf"].filter(Boolean).join("+") || "off";
   const voice = config.voice.enabled ? `on(${config.voice.model}/${config.voice.voiceId}/${config.voice.maxSeconds}s)` : "off";
   logger.info(
-    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} prompt_dump=${config.debug.promptDumpDir || "off"} vision=${visionNeeded ? `${VISION_MODEL}/${config.vision.detail}/t${config.vision.timeoutMs}/mt${config.vision.maxTokens}/wait${MEDIA_WAIT_MS}` : "off"} voice=${voice} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${materials ? `on(${config.files.dir},keep=${Math.round(config.files.keepMs / 3600000)}h)` : config.files.enabled ? "off(materialize)" : "off"} stickers=${stickers ? `${stickers.size}(archive=${stickers.archiveSize},recognize=${config.stickers.recognize ? "on" : "off"})` : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} history_max_age=${config.history.maxAgeMs > 0 ? `${config.history.maxAgeMs}ms` : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
+    `bot=${config.bot.name} persona_file=${config.bot.personaFile || "off"} persona_inline=${config.bot.personaIdentity ? "on" : "off"} persona_rules=${config.bot.personaRules.length} model=${DEEPSEEK_MODEL} prompt_dump=${config.debug.promptDumpDir || "off"} vision=${visionNeeded ? `${VISION_MODEL}/${config.vision.detail}/t${config.vision.timeoutMs}/mt${config.vision.maxTokens}/wait${MEDIA_WAIT_MS}` : "off"} voice=${voice} agent_client=${agentClient ? `on(${config.agentClient.host}:${config.agentClient.port}, mcp 127.0.0.1:${config.agentClient.mcpPort}, 文件 ${config.agentClient.fileHost}:${config.agentClient.filePort}, 宽限 ${Math.round(config.agentClient.graceMs / 1000)}s)` : "off"} proxy=${proxyOn ? config.proxy.url : "off"} decider=${decider ? `${config.decider.model}×${config.decider.apiKeys.length}` : "off"} search=${search?.usable() ? "on" : "off"} opencode=${opencode ? opencode.directories().map((dir) => `${dir.name}=${dir.path}`).join(",") : "off"} opencode_notice=${opencode && config.opencode.notice ? "on" : "off"} opencode_input=${opencode ? opencodeInput : "off"} opencode_concurrency=${opencode ? config.opencode.maxConcurrency : "off"} direct_users=${[...config.gate.directUsers].join(",") || "off"} reply_prompt=${replyPrompt} force_reply=${config.gate.forceReply.enabled ? `${[...config.gate.forceReply.groups].join(",")}@${config.gate.forceReply.messages}` : "off"} files=${materials ? `on(${config.files.dir},keep=${Math.round(config.files.keepMs / 3600000)}h)` : config.files.enabled ? "off(materialize)" : "off"} stickers=${stickers ? `${stickers.size}(archive=${stickers.archiveSize},recognize=${config.stickers.recognize ? "on" : "off"})` : "off"} memory=${memory ? memory.size : "off"} schedule=${schedule ? `${config.schedule.cron}@Asia/Shanghai` : "off"} exec=${cronExec ? `${config.exec.jobs.length}条` : "off"} welcome=${welcome ? [...config.welcome.groups].join(",") : "off"} history_max_age=${config.history.maxAgeMs > 0 ? `${config.history.maxAgeMs}ms` : "off"} groups=${groups} private=${privateUsers} admins=${[...config.bot.adminUsers].join(",") || "（无）"} power=${power.on ? "on" : "off"}`,
   );
 
   client.connect();
@@ -464,6 +577,8 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     logger.info("退出中…");
     opencode?.dispose();
+    await clientFiles?.dispose();
+    await agentClient?.dispose();
     materials?.dispose();
     schedule?.dispose();
     cronExec?.dispose();

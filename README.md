@@ -166,6 +166,28 @@ bot 自身的出网走 undici `ProxyAgent`（只作用于本进程），spawn �
 
 **聊天压缩包联动**：群里 / 私聊里发来的压缩包在聊天记录里显示为 `[文件：文件名（大小）]`。回复批构建时，系统会把**本批发言人最近发来的 `.zip` / `.rar`**（最多 `FILES_MAX_FILES` 个）下载并解压到 `FILES_DIR/<会话>/u<发送者>-m<消息id>-<序号>/`，再把「目录 + 文件清单」写进回复提示词——模型据此知道有哪些文件，需要看内容时让 opencode 去读（解压目录会作为 ACP `additionalDirectories` 在 `session/new` 时声明，opencode 才能在仓库之外读到这些目录）。只认 zip/rar；图片、音视频、Office 文档、**松散文本文件**等一律不支持（请群友打包成压缩包再发）。解压按多编码**严格**解码：先嗅探 BOM（UTF-8 / UTF-16LE / UTF-16BE），无 BOM 再依次尝试 UTF-8 / GB18030 / Big5 / Shift_JIS / EUC-KR，取第一个成功；命中非 UTF-8 的文本文件**就地重写为 UTF-8** 并在清单里标注编码。安全：条目名净化（拒绝绝对路径 / `..` / 盘符 / 反斜杠越界）、加密与多卷包整包拒绝、条目数 / 单文件 / 解压总量限额、解压后查符号链接；失败或拒绝都写进清单由模型转告用户（不静默跳过）。清理：目录按 `FILES_KEEP_MS` 到期删除、磁盘超 `FILES_STORE_MAX_BYTES` 时删最旧，启动与每 `FILES_SWEEP_MS` 扫描一次，并清 `.tmp` 残留。`FILES_MATERIALIZE` 独立控制是否物料化（与 `OPENCODE_ENABLED` 解耦）；关掉即不下载任何压缩包。给模型的执行逻辑说明可经 `FILES_PROMPT`（解压成功/失败与失败要如实转告等）与 `FILES_READ_PROMPT`（怎么用 opencode 读解压目录，仅在挂了 opencode 时追加）覆盖，留空用内置默认；`.env.example` 里给出了示例定义。
 
+### 远程 Agent 客户端（可选）
+
+群友不方便打包日志时，让他运行这个 Windows 客户端，bot 的 opencode 就能直接在那台机器上做只读排查（读日志文件、跑 PowerShell 看环境 / 进程 / 事件），而不是只看到一份静态压缩包。
+
+流程：
+
+1. 配好 `AGENT_CLIENT_*`（至少 `AGENT_CLIENT_ENABLED=true`、`AGENT_CLIENT_PSK`、`AGENT_CLIENT_ENDPOINT`），公网入口经 frp 以 tcp 转发到 `AGENT_CLIENT_PORT`；
+2. 运行 `scripts/build-client.sh` 交叉编译出 Windows 压缩包，放到 `data/agent-client/`，再把路径填进 `AGENT_CLIENT_FILE`；
+3. 群友索要时，模型用 `send_client` 把压缩包发到当前会话；
+4. 群友解压双击，窗口顶部显示 8 位配对码，把码发回来；
+5. 模型把这个码作为 `opencode` 工具的 `client` 参数，之后的调用就在那台机器上执行。
+
+**必须知道**：
+
+- 传输是**明文 TCP + 应用层 AES-256-GCM**（不做 TLS，frp 只做 tcp 转发）。PSK 随 exe 一起分发，所以这层加密只防链路上的旁观者，挡不住拿到 exe 的人，也不构成「安全通信」。
+- **只读只靠提示词约束**：`run_psh` 实际能写盘，模型被群聊内容带偏时会真实执行。
+- 客户端窗口逐条显示每次执行是什么、结果如何——这是运行者唯一的审计手段。
+- 客户端与服务端靠心跳判定断线（服务端每 20 秒发 `ping`，任一方 45 秒收不到可解密帧即断开重连），所以拔网线 / 合盖也会在 45 秒内被发现，不会留下永久占名额的半开连接。客户端打开后先与 bot 完成一次加密握手（服务端先证明自己持有密钥，客户端再交配对码），随后窗口才显示码。
+- `read_file` 认 UTF-16LE/BE 与 UTF-8（带 BOM 时**BOM 优先**），无 BOM 才退回 UTF-8→GB18030；PowerShell 5.1 的 `Out-File` 默认写 UTF-16LE，因此读它写出的日志不会变成乱码。
+- 断线后 60 秒内客户端自动重连（2s 起、退避到 10s），配对码不变；**宽限期从心跳判定断线时才开始计时**，超过宽限期才换码，需要重新发给 bot。
+- 未签名的 exe 首次运行会弹 SmartScreen，需要点「更多信息 → 仍要运行」。
+
 ## 配置
 
 完整列表见 [`.env.example`](.env.example)，常用的：

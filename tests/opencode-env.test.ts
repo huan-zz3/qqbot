@@ -16,7 +16,13 @@ for (const key of ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "al
   delete process.env[key];
 }
 
+// 配对码配置的端口与调用超时在 config.ts import 时就固化，必须在此之前设置。
+// （NODE_TEST_CONTEXT 下 config.ts 不读 .env，这里显式给值以验证注入用的是 config 而不是写死常量。）
+process.env.AGENT_CLIENT_MCP_PORT = "7802";
+process.env.AGENT_CLIENT_CALL_TIMEOUT_MS = "90000";
+
 const { childEnv } = await import("../src/opencode/env.js");
+const { config } = await import("../src/config.js");
 
 // 代理地址按需注入，且大小写两组变量都写。
 test("childEnv injects http/https/all proxy (both cases) when a proxy is set", () => {
@@ -69,5 +75,58 @@ test("childEnv always injects the read-only OPENCODE_CONFIG_CONTENT deny policy"
   for (const action of ["edit", "shell", "execute", "webfetch", "websearch", "subagent"]) {
     assert.ok(denied.includes(action), `${action} should be denied`);
   }
+});
+
+// 无配对码时必须是逐字节固定的六条 deny：防止有人误删/改写只读加固（回归防线）。
+test("childEnv without a pairing code emits exactly the six deny rules", () => {
+  const env = childEnv(undefined, undefined);
+  const expected = {
+    permissions: [
+      { action: "edit", resource: "*", effect: "deny" },
+      { action: "shell", resource: "*", effect: "deny" },
+      { action: "execute", resource: "*", effect: "deny" },
+      { action: "webfetch", resource: "*", effect: "deny" },
+      { action: "websearch", resource: "*", effect: "deny" },
+      { action: "subagent", resource: "*", effect: "deny" },
+    ],
+  };
+  assert.equal(env.OPENCODE_CONFIG_CONTENT, JSON.stringify(expected));
+});
+
+// 带配对码时：六条 deny 原样保留，并叠加指向本机 MCP 的远程 server（端口/超时取自 config）。
+test("childEnv with a pairing code adds the agent MCP server without dropping the deny rules", () => {
+  const env = childEnv(undefined, "12345678");
+  const parsed = JSON.parse(String(env.OPENCODE_CONFIG_CONTENT)) as {
+    permissions: Array<{ action: string; resource: string; effect: string }>;
+    mcp: {
+      servers: {
+        agent: {
+          type: string;
+          url: string;
+          headers: Record<string, string>;
+          codemode: boolean;
+          timeout: { execution: number };
+        };
+      };
+    };
+  };
+
+  assert.deepEqual(parsed.permissions, [
+    { action: "edit", resource: "*", effect: "deny" },
+    { action: "shell", resource: "*", effect: "deny" },
+    { action: "execute", resource: "*", effect: "deny" },
+    { action: "webfetch", resource: "*", effect: "deny" },
+    { action: "websearch", resource: "*", effect: "deny" },
+    { action: "subagent", resource: "*", effect: "deny" },
+  ]);
+
+  const agent = parsed.mcp.servers.agent;
+  assert.equal(agent.type, "remote");
+  assert.ok(agent.url.startsWith("http://127.0.0.1:"), `unexpected url: ${agent.url}`);
+  assert.ok(agent.url.endsWith("/mcp"), `unexpected url: ${agent.url}`);
+  assert.equal(agent.url, `http://127.0.0.1:${config.agentClient.mcpPort}/mcp`);
+  assert.equal(agent.headers["X-Pair-Code"], "12345678");
+  assert.equal(agent.codemode, false);
+  assert.equal(agent.timeout.execution, config.agentClient.callTimeoutMs + 5000);
 });
 
