@@ -2,7 +2,16 @@
 # 构建 Windows x64 客户端压缩包。可在 Linux 上交叉编译（不依赖 Windows）。
 #
 # 用法：
-#   AGENT_CLIENT_ENDPOINT=tcp://1.2.3.4:7801 AGENT_CLIENT_PSK=<64 位 hex> scripts/build-client.sh
+#   scripts/build-client.sh
+#
+# 配置默认从仓库根目录的 .env 读取（只读下面四个键，不 source 整个文件）：
+#   AGENT_CLIENT_ENDPOINT        服务端地址，tcp://主机:端口
+#   AGENT_CLIENT_PSK             32 字节 hex（64 个十六进制字符）
+#   AGENT_CLIENT_PSH_TIMEOUT_MS  注入 exe 的本地命令超时（可选，默认 60000）
+#   AGENT_CLIENT_MAX_OUTPUT_CHARS 注入 exe 的本地输出上限（可选，默认 20000）
+#
+# 也可用同名环境变量临时覆盖（环境变量优先于 .env），例如：
+#   AGENT_CLIENT_PSK=<64 位 hex> scripts/build-client.sh
 #
 # 产物：data/agent-client/qqbot-agent-<version>-win64.zip
 set -euo pipefail
@@ -10,20 +19,53 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-if [[ -z "${AGENT_CLIENT_ENDPOINT:-}" ]]; then
-  echo "错误：未设置 AGENT_CLIENT_ENDPOINT（应为 tcp://主机:端口，例如 tcp://1.2.3.4:7801）" >&2
-  exit 1
-fi
-if [[ -z "${AGENT_CLIENT_PSK:-}" ]]; then
-  echo "错误：未设置 AGENT_CLIENT_PSK（32 字节 hex，与服务端 AGENT_CLIENT_PSK 一致）" >&2
-  exit 1
-fi
+# 从 .env 读取单个键（不 source：.env 里有带空格/引号/可能含 $ 的值）。
+# 语义接近 dotenv：精确键名匹配、去行尾 \r、去值两端空白、去掉一层成对引号；
+# 文件缺失或没有该键时静默返回空，由下面的校验报错。
+dotenv_get() {
+  local key="$1" line value
+  [[ -f "$ROOT/.env" ]] || return 0
+  line="$(grep -E "^${key}=" "$ROOT/.env" | tail -n1 || true)"
+  [[ -n "$line" ]] || return 0
+  value="${line#*=}"
+  value="${value%$'\r'}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  if [[ ${#value} -ge 2 ]]; then
+    case "$value" in
+      \"*\") value="${value:1:${#value}-2}" ;;
+      \'*\') value="${value:1:${#value}-2}" ;;
+    esac
+  fi
+  printf '%s' "$value"
+}
 
-ENDPOINT="$AGENT_CLIENT_ENDPOINT"
-PSK="$AGENT_CLIENT_PSK"
+# 环境变量优先，其次 .env。
+env_or_dotenv() {
+  local value="${!1:-}"
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value"
+  else
+    dotenv_get "$1"
+  fi
+}
+
+ENDPOINT="$(env_or_dotenv AGENT_CLIENT_ENDPOINT)"
+PSK="$(env_or_dotenv AGENT_CLIENT_PSK)"
 # 注入到 exe 的本地兜底上限；与服务端 AGENT_CLIENT_PSH_TIMEOUT_MS / AGENT_CLIENT_MAX_OUTPUT_CHARS 对应。
-PSH_TIMEOUT_MS="${AGENT_CLIENT_PSH_TIMEOUT_MS:-60000}"
-MAX_OUTPUT_CHARS="${AGENT_CLIENT_MAX_OUTPUT_CHARS:-20000}"
+PSH_TIMEOUT_MS="$(env_or_dotenv AGENT_CLIENT_PSH_TIMEOUT_MS)"
+PSH_TIMEOUT_MS="${PSH_TIMEOUT_MS:-60000}"
+MAX_OUTPUT_CHARS="$(env_or_dotenv AGENT_CLIENT_MAX_OUTPUT_CHARS)"
+MAX_OUTPUT_CHARS="${MAX_OUTPUT_CHARS:-20000}"
+
+if [[ -z "$ENDPOINT" ]]; then
+  echo "错误：AGENT_CLIENT_ENDPOINT 未设置（.env 或环境变量里都需要，形如 tcp://主机:端口，例如 tcp://1.2.3.4:7801）" >&2
+  exit 1
+fi
+if [[ -z "$PSK" ]]; then
+  echo "错误：AGENT_CLIENT_PSK 未设置（.env 或环境变量里都需要，32 字节 hex，与服务端 AGENT_CLIENT_PSK 一致）" >&2
+  exit 1
+fi
 
 if [[ "$ENDPOINT" != tcp://* ]]; then
   echo "错误：AGENT_CLIENT_ENDPOINT 必须以 tcp:// 开头，当前是：$ENDPOINT" >&2
