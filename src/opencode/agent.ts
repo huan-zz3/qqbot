@@ -72,6 +72,61 @@ function summarize(prompt: string): string {
 }
 
 /**
+ * session/new 的「插件还没激活完」竞态：只在错误文本命中这些词时重试。
+ * 其它错误（目录不存在、协议不兼容、子进程退出等）重试不会变好，只会白等，所以立刻抛。
+ */
+const SESSION_NEW_RETRYABLE = /Internal service failure|did not finish activating|ServiceUnavailable/i;
+/** session/new 总尝试次数：首次 + 2 次重试。 */
+const SESSION_NEW_ATTEMPTS = 3;
+/** 每次重试前等待的时长：第 1 次重试 3s、第 2 次重试 6s。 */
+const SESSION_NEW_RETRY_DELAYS_MS = [3000, 6000];
+
+/**
+ * 把 ACP 错误里 JSON-RPC error 的 `data` 拼成可读细节；没有 data 时返回空串。
+ * 取不到已知字段就退回原始 JSON，至少别把排查线索丢掉。
+ */
+function describeErrorData(error: unknown): string {
+  const data = (error as { data?: unknown }).data;
+  if (data === undefined || data === null) return "";
+  const record = typeof data === "object" ? (data as Record<string, unknown>) : undefined;
+  const service = typeof record?.service === "string" ? record.service : undefined;
+  const errorName = typeof record?.errorName === "string" ? record.errorName : undefined;
+  if (service || errorName) {
+    const hint = service === "plugin" || errorName === "ServiceUnavailableError" ? "插件激活未完成" : "ACP 错误";
+    const fields = [service && `service=${service}`, errorName && `errorName=${errorName}`].filter(Boolean).join("，");
+    return `：${hint}（${fields}）`;
+  }
+  let json: string;
+  try {
+    json = JSON.stringify(data) ?? String(data);
+  } catch {
+    json = String(data);
+  }
+  return `：${json}`;
+}
+
+/**
+ * 可被取消打断的等待：cancellationSignal abort 后立即 reject，不会让重试等待拖住总超时/取消。
+ */
+function waitRetryDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason instanceof Error ? signal.reason : new Error("已取消"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal.reason instanceof Error ? signal.reason : new Error("已取消"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
  * OpenCode 只读客户端。生命周期内不在内存里保留任何 ACP 状态：
  * 每次 run() 现开一个子进程，结束（正常或异常）即杀掉。
  */
@@ -270,7 +325,45 @@ export class OpenCodeAgent {
           );
           logger.debug(`[opencode] initialize 完成 protocol=${init.protocolVersion}`);
 
-          const session = await ctx.buildSession(cwd).withAdditionalDirectories(additionalDirectories).start({ cancellationSignal });
+          // session/new 外面包一层重试：opencode 在 `cli.acp.session.new` 里要等这个 location 的插件
+          // 全部激活，而该等待有上限（源码里那个 fiber 只给 5s，日志为 `Location plugins did not
+          // finish activating`）。插件激活要连同全局 MCP 服务器一起完成，冷目录首次实测 10–20s，
+          // 偶发越界就报 `Internal error: Internal service failure`；同一目录紧接着重试往往就成功。
+          // 这是激活竞态而不是配置错误，所以只对这类错误重试并给足时间；其它错误立刻抛——重试只会白等。
+          // 空闲计时器此时还没启动（resetIdle 在 prompt 前才第一次调用），重试不会被误判为空闲超时；
+          // 总超时 totalTimer 从一开始就在跑，覆盖重试全过程。
+          const startSession = async () => {
+            for (let attempt = 1; ; attempt++) {
+              try {
+                const started = await ctx
+                  .buildSession(cwd)
+                  .withAdditionalDirectories(additionalDirectories)
+                  .start({ cancellationSignal });
+                if (attempt > 1) {
+                  logger.info(`[opencode] session/new 第 ${attempt} 次尝试成功（共重试 ${attempt - 1} 次）`);
+                }
+                return started;
+              } catch (error) {
+                const message = (error as Error).message || String(error);
+                // 附加信息只用于日志/抛出；重试判定始终只看原始 message，不改变匹配结果。
+                const detail = describeErrorData(error);
+                const rethrow = (): never => {
+                  throw detail ? new Error(`${message}${detail}`, { cause: error }) : error;
+                };
+                if (!SESSION_NEW_RETRYABLE.test(message)) rethrow();
+                if (attempt >= SESSION_NEW_ATTEMPTS) {
+                  logger.warn(`[opencode] session/new 已重试 ${attempt - 1} 次仍失败：${summarize(message)}${detail}，放弃`);
+                  rethrow();
+                }
+                const delay = SESSION_NEW_RETRY_DELAYS_MS[attempt - 1] ?? 6000;
+                logger.info(
+                  `[opencode] session/new 未就绪（第 ${attempt} 次尝试）：${summarize(message)}${detail}，${delay}ms 后重试`,
+                );
+                await waitRetryDelay(delay, cancellationSignal);
+              }
+            }
+          };
+          const session = await startSession();
           logger.info(`[opencode] 会话 ${session.sessionId} 已建立`);
           // 显式指定模型：opencode acp 没有 --model，只能经 session/set_config_option 设置。
           const model = resolveModelValue(session.newSessionResponse.configOptions, this.options.model ?? "");

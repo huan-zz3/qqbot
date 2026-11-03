@@ -206,7 +206,7 @@ test("counts tool rounds per group independently", async () => {
   // 第 2 轮搜索已撤，只剩 opencode，并注入该组不可用提示。
   const second = (bodies[1]!.tools as any[]).map((t) => t.function.name);
   assert.deepEqual(second, ["opencode"]);
-  assert.match(bodies[1]!.messages.at(-1).content, /联网搜索的调用次数已用尽/);
+  assert.match(bodies[1]!.messages.at(-1).content, /联网搜索 本轮已用完调用次数/);
   // 第 3 轮两组都用满：不再挂工具，注入纯文本收尾指令。
   assert.equal(bodies[2]!.tools, undefined);
   assert.match(bodies[2]!.messages.at(-1).content, /工具调用次数已用尽/);

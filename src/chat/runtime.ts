@@ -546,7 +546,7 @@ export class ChatRuntime {
               // 发到当前会话：群聊与私聊用同一个 target，NapCat 侧按 target 选上传接口。
               send: async () => {
                 await this.deps.client.sendFile(session.target, agentClient.fileUrl(), agentClient.fileName());
-                return `已把 ${agentClient.fileName()} 发到当前会话。等对方解压运行、把窗口里显示的 8 位配对码发来，再把这个码作为 opencode 的 client 参数去查看那台机器。`;
+                return `客户端压缩包 ${agentClient.fileName()} 已发送成功，已发到当前会话。等对方解压运行、把窗口里显示的 8 位配对码发来，再把这个码作为 opencode 的 client 参数去查看那台机器。`;
               },
             }
           : undefined,
