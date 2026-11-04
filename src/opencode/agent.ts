@@ -155,7 +155,7 @@ export class OpenCodeAgent {
    * @param additionalDirectories 额外授权的绝对路径目录（如解压出来的压缩包目录）；
    *   在 session/new 时声明，让 OpenCode 能读工作区之外的这些目录。
    * @param pairing 群友客户端的配对码；给出时注入远程 MCP server 并抬高空闲超时。
-   * @returns 任务结束时 OpenCode 的文本答复（可能为空或已截断）；失败时抛出。
+   * @returns 任务结束时 OpenCode 的文本答复（可能为空或已截断）与是否完整结束；失败时抛出。
    */
   run(
     prompt: string,
@@ -163,7 +163,7 @@ export class OpenCodeAgent {
     key: string,
     additionalDirectories: string[] = [],
     pairing?: string,
-  ): Promise<string> {
+  ): Promise<{ text: string; complete: boolean }> {
     // 记下入队时刻，真正开始时用于报告排队等待了多久（不含任务本身耗时）。
     const queuedAt = Date.now();
     return this.scheduler.run(key, () =>
@@ -197,7 +197,7 @@ export class OpenCodeAgent {
     additionalDirectories: string[],
     queuedAt: number,
     pairing?: string,
-  ): Promise<string> {
+  ): Promise<{ text: string; complete: boolean }> {
     const {
       command,
       args,
@@ -430,6 +430,8 @@ export class OpenCodeAgent {
       if (cancelReason) throw new Error(failReason());
 
       let output = result.text.trim();
+      // complete 只看是否正常结束与是否有正文；截断不影响结论是否可用。
+      const complete = result.stopReason === "end_turn" && output.length > 0;
       if (output.length > maxOutputChars) output = `${output.slice(0, maxOutputChars)}\n…(结果已截断)`;
       // 非正常结束时把状态告知模型，避免它把不完整结果当成完整答案。
       if (result.stopReason !== "end_turn") output = `${output}\n[OpenCode 未正常结束: ${result.stopReason}]`.trim();
@@ -438,7 +440,7 @@ export class OpenCodeAgent {
       logger.info(
         `[opencode] 完成 会话=${key} 用时=${Date.now() - startedAt}ms stop=${result.stopReason} 字符=${output.length} updates=${updateCount}`,
       );
-      return output;
+      return { text: output, complete };
     } catch (error) {
       if (cancelReason) {
         logger.warn(`[opencode] 会话=${key} ${failReason()}，已取消`);

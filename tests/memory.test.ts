@@ -187,6 +187,21 @@ test("the extractor is asked for lasting facts and sees who talks to whom", asyn
   assert.match(prompts[0]!, /李四（QQ 42） → OvO：我也是（引用OvO的「我喜欢猫」）/);
 });
 
+// opencode 结论不进记忆整理：注入的提取器收到的 user 提示词里不含结论文本。
+test("memory extraction never sees opencode notes", async () => {
+  const prompts: string[] = [];
+  const { memory } = await store({ people: [] }, prompts);
+  await memory.learn(
+    "group",
+    "测试群",
+    [{ ...record(42, "李四", "日志为啥报错"), opencodeNotes: ["是 pnpm 脚本没找到"] }],
+    "OvO",
+  );
+  assert.doesNotMatch(prompts[0]!, /pnpm 脚本没找到/);
+  // 正例：聊天正文确实进了提取提示词，否则上面的否定断言无法证明「只漏掉了结论」。
+  assert.match(prompts[0]!, /日志为啥报错/);
+});
+
 /**
  * SessionHistory.context：共享窗口与「逐发言账号保证」的并集。
  * 共享窗口之外，每位发言者各自最近 perUser 条也会被纳入，且保持原有时间顺序、自动去重。

@@ -63,14 +63,14 @@ test("permission with only allow options is cancelled, never allowed", () => {
 const DIR_DEFAULT = { name: "default", path: "/tmp/opencode-repo-default" };
 const DIR_WEB = { name: "web", path: "/tmp/opencode-repo-web" };
 const KEY = "group-500";
-function fakeAgent() {
+function fakeAgent(complete = true) {
   const calls: Array<{ prompt: string; directory: string; key: string; dirs: string[] }> = [];
   return {
     calls,
     directories: () => [DIR_DEFAULT, DIR_WEB],
     run: async (prompt: string, directory: string, key: string, dirs: string[] = []) => {
       calls.push({ prompt, directory, key, dirs });
-      return "结果";
+      return { text: "结果", complete };
     },
   };
 }
@@ -175,4 +175,16 @@ test("opencode tool does not notify for an empty prompt", async () => {
   assert.equal(await tool.handler({}), "prompt 不能为空");
   assert.equal(notices, 0);
   assert.deepEqual(agent.calls, []);
+});
+
+// onResult：只在后端正常结束且有正文（complete）时触发一次，参数是后端返回的文本。
+test("opencode tool reports the result only for a complete run", async () => {
+  const results: string[] = [];
+  const complete = openCodeTool(fakeAgent(true) as never, KEY, { onResult: (text) => results.push(text) });
+  assert.equal(await complete.handler({ prompt: "看看代码", directory: "default" }), "结果");
+  assert.deepEqual(results, ["结果"]);
+
+  const incomplete = openCodeTool(fakeAgent(false) as never, KEY, { onResult: (text) => results.push(text) });
+  assert.equal(await incomplete.handler({ prompt: "看看代码", directory: "default" }), "结果");
+  assert.deepEqual(results, ["结果"]);
 });

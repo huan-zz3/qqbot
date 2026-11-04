@@ -258,6 +258,14 @@ test("state marks the bot's own messages and flags", () => {
   assert.deepEqual(Object.keys(state.bot).sort(), ["aliases", "name"]);
 });
 
+// opencode 结论只属于回复提示词：decider 的 state 不得带出结论文本。
+test("state never exposes opencode notes", () => {
+  const state = buildState(context({ pending: [record({ opencodeNotes: ["是 pnpm 脚本没找到"] })] }));
+  assert.doesNotMatch(JSON.stringify(state), /pnpm 脚本没找到/);
+  // 正例：消息正文确实进了 decider 输入，否则上面的否定断言无法证明「只漏掉了结论」。
+  assert.match(JSON.stringify(state), /今天吃什么/);
+});
+
 /**
  * GATE_REPLY_QUESTION_PROMPT / _TRUE_PROMPT / _FALSE_PROMPT 是 should_reply 的
  * 正文 / criteria.true / criteria.false 的**唯一来源**：代码不再拼接任何内置文案。

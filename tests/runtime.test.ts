@@ -523,7 +523,7 @@ test("an archive from the current speaker is materialized and its manifest and d
     directories: () => [{ name: "default", path: "/tmp/repo" }],
     run: async (_prompt: string, _directory: string, _key: string, dirs: string[] = []) => {
       agentDirs.push(dirs);
-      return "看完了";
+      return { text: "看完了", complete: true };
     },
   };
   let round = 0;
@@ -559,6 +559,69 @@ test("an archive from the current speaker is materialized and its manifest and d
   assert.deepEqual(requests, [{ name: "logs.zip", userId: 7 }]);
   assert.match(systems[0]!, /【清单】已解压到 \/tmp\/upl\/logs/);
   assert.deepEqual(agentDirs, [["/tmp/upl/logs"]]);
+});
+
+// 跑一轮「模型调 opencode → 拿结论再作答」的流程，返回本批两条消息在会话历史里的记录。
+// complete 由假 opencode 后端决定，用于验证结论是否挂到触发消息上。
+async function opencodeNote(complete: boolean) {
+  const batches: number[] = [];
+  const { runtime } = setup(async (state) => {
+    batches.push((state as { new_messages: unknown[] }).new_messages.length);
+    return { should_reply: 0.9, addressed: 0.9 };
+  }, ["看完了"]);
+  (runtime as unknown as { deps: { opencode: unknown } }).deps.opencode = {
+    directories: () => [{ name: "default", path: "/tmp/repo" }],
+    run: async () => ({ text: "是 pnpm 脚本没找到", complete }),
+  };
+  let round = 0;
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    round++;
+    if (round === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: null,
+                tool_calls: [
+                  { id: "c1", type: "function", function: { name: "opencode", arguments: JSON.stringify({ prompt: "看看日志", directory: "default" }) } },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: "看完了" } }] }), { status: 200 });
+  }) as typeof fetch;
+
+  // 本批两条消息：第一条没 @，第二条 @ 了 bot——结论只能挂在后者（target 选择）。
+  const other = groupMessage("帮我看看这个");
+  const message = groupMessage("看看日志", [{ type: "at", data: { qq: String(SELF) } }]);
+  runtime.handle(other);
+  runtime.handle(message);
+  await wait(400);
+  const sessions = (runtime as unknown as {
+    sessions: Map<string, { history: { byId(id: number): { opencodeNotes?: string[] } | undefined } }>;
+  }).sessions;
+  const history = sessions.get("group:500")!.history;
+  // 两条消息必须同批，否则「非触发消息不挂」的断言没有意义。
+  assert.deepEqual(batches, [2]);
+  return { target: history.byId(message.message_id), other: history.byId(other.message_id) };
+}
+
+// 成功（complete）的 opencode 结论挂到触发这次回复的消息上（本批最后一条 @bot 的消息），
+// 供后续同一群友再问时复用；同批的非触发消息不挂。
+test("a complete opencode result is attached to the triggering message", async () => {
+  const { target, other } = await opencodeNote(true);
+  assert.deepEqual(target!.opencodeNotes, ["是 pnpm 脚本没找到"]);
+  assert.equal(other!.opencodeNotes, undefined);
+});
+
+// 未正常结束（complete=false）的结论不挂到消息上。
+test("an incomplete opencode result is not attached", async () => {
+  assert.equal((await opencodeNote(false)).target!.opencodeNotes, undefined);
 });
 
 // 物料化失败：失败原因进入提示词（不静默省略）。

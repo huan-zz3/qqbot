@@ -54,6 +54,8 @@ export type ChatRecord = {
   files?: FileRef[];
   // 表情包描述、@ 展示名、引用内容全部补齐后 resolve。
   ready?: Promise<void>;
+  // 这条消息触发的 opencode 成功结论；只有 reply.buildTranscript 可以渲染，decider 与记忆整理不得读取。
+  opencodeNotes?: string[];
 };
 
 // 引用原文在记录里的最大字符数，超出截断加省略号，避免旧消息原文挤占上下文。

@@ -515,6 +515,12 @@ export class ChatRuntime {
     const onOpencodeStart = config.opencode.notice ? () => this.sendOpencodeNotice(session) : undefined;
     // 群友远程客户端（配对码 + 客户端压缩包）：未启用时为 undefined，工具层据此不暴露配对码参数。
     const agentClient = this.deps.agentClient;
+    // 本批触发回复的消息：结论要挂在它上面（与它同生命周期）。
+    const list = [...pending];
+    // 引用目标：本批最后一条直接 @/回复机器人的消息，没有就取本批最后一条。
+    const target = list.findLast((record) => record.atBot || record.replyToBot) ?? list.at(-1)!;
+    // 本轮成功的 opencode 结论，按完成顺序收集，生成结束后挂到 target。
+    const notes: string[] = [];
     const generated = await generateReply(
       {
         scope: session.scope,
@@ -538,6 +544,7 @@ export class ChatRuntime {
               key: session.key,
               dirs: materials.dirs,
               client: agentClient,
+              onResult: (text) => notes.push(text),
             }
           : undefined,
         sendClient: agentClient
@@ -556,15 +563,20 @@ export class ChatRuntime {
     // 机器人最近发过的文本，用来检查是否在复读同一个结尾。
     const recentBot = records.filter((record) => record.fromBot).map((record) => record.text);
     const parts = dropRepeatedEndings(generated, recentBot);
+    // 结论随触发消息留存；即使本条回复没产出内容也挂上（记录仍在历史里）。
+    if (notes.length > 0) {
+      if (!target.opencodeNotes) target.opencodeNotes = [];
+      target.opencodeNotes.push(...notes);
+      logger.info(
+        `[opencode] ${session.key} 结论挂到消息 ${target.messageId ?? "-"}：${notes.length} 条 ${notes.reduce((n, t) => n + t.length, 0)} 字符`,
+      );
+    }
     if (parts.length === 0) {
       // 模型未产出有效内容（纯空白/接口异常）：记 warn 并跳过本轮发送。
       logger.warn(`[chat] ${session.key} 模型未产出有效内容，跳过发送`);
       return;
     }
 
-    const list = [...pending];
-    // 引用目标：本批最后一条直接 @/回复机器人的消息，没有就取本批最后一条。
-    const target = list.findLast((record) => record.atBot || record.replyToBot) ?? list.at(-1)!;
     // 群聊里且回复期间对话又往前走了（最后一条已不是目标消息）时才带引用，避免显得答非所问。
     const quote =
       session.scope === "group" && target.messageId !== undefined && session.history.last() !== target;
