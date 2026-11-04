@@ -1,5 +1,5 @@
 /**
- * agent-client 暴露给 opencode 的两个 MCP 工具：schema 与结果格式化。
+ * agent-client 暴露给 opencode 的 MCP 工具：schema 与结果格式化。
  *
  * 这里不碰 socket：真正的「发帧 → 等回包」由 server.ts 的 invoker 完成，
  * 本模块只负责拼请求、把客户端回包转成模型可读的 MCP content，并按服务端上限二次截断。
@@ -7,8 +7,18 @@
  */
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
-/** 工具名固定两个：越少越好，模型没有选择成本。 */
-export type ToolName = "run_psh" | "read_file";
+import {
+  type BatchEntry,
+  type BatchItem,
+  type BatchLimits,
+  MAX_BATCH_ITEMS,
+  batchMaxTotalChars,
+  formatBatch,
+  planBatch,
+} from "./batch.js";
+
+/** 工具名：单条两个 + 批量一个，越少越好，模型没有选择成本。 */
+export type ToolName = "run_psh" | "read_file" | "run_batch";
 
 /** 客户端回包（与线协议 `{id, ok, result|error}` 对应；id 由 server 配对后剥离）。 */
 export type ToolReply = { ok: true; result: unknown } | { ok: false; error: string };
@@ -63,11 +73,39 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "run_batch",
+    description: `一次在群友的 Windows 电脑上执行多条 PowerShell 命令、读取多个文件；最多 ${MAX_BATCH_ITEMS} 条。需要多条时全部放进这一次调用，按数组顺序串行执行。`,
+    // 用宽松对象而不是 oneOf：模型与客户端都不擅长 oneOf，逐项必填由服务端校验。
+    inputSchema: {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_BATCH_ITEMS,
+          items: {
+            type: "object",
+            properties: {
+              type: { type: "string", enum: ["psh", "read"] },
+              command: { type: "string" },
+              timeout_ms: { type: "number" },
+              path: { type: "string" },
+              max_bytes: { type: "number" },
+            },
+            required: ["type"],
+          },
+        },
+      },
+      required: ["items"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /** 严格判断工具名，挡掉模型拼错的名字而不是把它发给客户端。 */
 export function isToolName(name: string): name is ToolName {
-  return name === "run_psh" || name === "read_file";
+  return name === "run_psh" || name === "read_file" || name === "run_batch";
 }
 
 /**
@@ -137,6 +175,106 @@ function formatReadFile(reply: ToolReply): ToolOutcome {
   return { text: notes.length > 0 ? `${text}\n（${notes.join("；")}）` : text, isError: false };
 }
 
+/** 批量项在聚合头部的工具名，与单条工具同名，模型才能对得上。 */
+function batchToolName(item: BatchItem): string {
+  return item.type === "psh" ? "run_psh" : "read_file";
+}
+
+function batchTarget(item: BatchItem): string {
+  return item.type === "psh" ? item.command : item.path;
+}
+
+/** 结构非法的项：尽量从原始参数里还原出工具名与目标，还原不出就留空。 */
+function failureHeader(raw: unknown): { tool: string; target: string } {
+  const record = asRecord(raw);
+  const type = typeof record.type === "string" ? record.type : "";
+  if (type === "psh") return { tool: "run_psh", target: textOf(record.command) };
+  if (type === "read") return { tool: "read_file", target: textOf(record.path) };
+  return { tool: "run_batch", target: type };
+}
+
+/** 客户端单项回包：与单条工具同形状，外层多包了一个 ok。 */
+function batchReplyOf(value: unknown): ToolReply | undefined {
+  const record = asRecord(value);
+  if (record.ok === true) return { ok: true, result: record.result };
+  if (record.ok === false) {
+    return { ok: false, error: typeof record.error === "string" ? record.error : "客户端未给出原因" };
+  }
+  return undefined;
+}
+
+/** 单项正文复用单条排版并按单条上限截断；失败项加「失败：」前缀，免得和正常正文混在一起。 */
+function batchBody(reply: ToolReply | undefined, item: BatchItem, maxOutputChars: number): string {
+  if (!reply) return "失败：客户端回包缺少该项结果";
+  const outcome = item.type === "psh" ? formatPsh(reply) : formatReadFile(reply);
+  if (outcome.isError) return `失败：${outcome.text}`;
+  return truncateText(outcome.text, maxOutputChars);
+}
+
+/**
+ * 批量分支：先逐项校验（非法项就地失败、不下发），再一帧发出去，回包按原始索引合并。
+ * isError 只表示「一条都没执行」；部分失败仍按正常结果交给模型。
+ */
+async function handleBatchCall(
+  rawArgs: unknown,
+  invoke: ToolInvoker,
+  limits: BatchLimits,
+): Promise<ToolOutcome> {
+  const rawItems = asRecord(rawArgs).items;
+  const plan = planBatch(rawItems, limits);
+  const maxTotalChars = batchMaxTotalChars(limits.maxOutputChars);
+  const entries: BatchEntry[] = [];
+
+  if (!plan.ok) return { text: plan.error, isError: true };
+
+  const rawList = Array.isArray(rawItems) ? rawItems : [];
+  const plannedFailures = new Map(plan.failures.map((failure) => [failure.index, failure.error]));
+
+  // 全部项都结构非法：没有任何一条可下发，isError 标真。
+  if (plan.dispatch.length === 0) {
+    for (const failure of plan.failures) {
+      entries.push({
+        ...failureHeader(rawList[failure.index]),
+        body: `失败：${failure.error}`,
+      });
+    }
+    return { text: formatBatch(entries, maxTotalChars), isError: true };
+  }
+
+  let reply: ToolReply;
+  try {
+    reply = await invoke("run_batch", { items: plan.dispatch.map((entry) => entry.item) });
+  } catch (error) {
+    // 转发层抛错（超时/连接断开）已经带原因，原样交给模型；不伪装成「没有输出」。
+    return { text: `调用失败：${error instanceof Error ? error.message : String(error)}`, isError: true };
+  }
+  // 整批超时/码不可兑付：客户端没有跑任何一条。
+  if (!reply.ok) return { text: reply.error, isError: true };
+
+  const resultItems = asRecord(reply.result).items;
+  if (!Array.isArray(resultItems)) return { text: "客户端回包缺少 items", isError: true };
+
+  let cursor = 0;
+  for (let index = 0; index < plan.total; index++) {
+    const failure = plannedFailures.get(index);
+    if (failure !== undefined) {
+      entries.push({ ...failureHeader(rawList[index]), body: `失败：${failure}` });
+      continue;
+    }
+    const dispatched = plan.dispatch[cursor];
+    if (!dispatched) continue;
+    const itemReply = batchReplyOf(resultItems[cursor]);
+    cursor++;
+    entries.push({
+      tool: batchToolName(dispatched.item),
+      target: batchTarget(dispatched.item),
+      body: batchBody(itemReply, dispatched.item, limits.maxOutputChars),
+    });
+  }
+
+  return { text: formatBatch(entries, maxTotalChars), isError: false };
+}
+
 /**
  * 执行一次工具调用：转发 → 等回包 → 格式化 → 二次截断。
  * 工具名非法或回包形状不对都转成 isError 文本，让模型看到原因而不是收到协议异常。
@@ -145,11 +283,13 @@ export async function handleToolCall(
   name: string,
   rawArgs: unknown,
   invoke: ToolInvoker,
-  maxOutputChars: number,
+  limits: BatchLimits,
 ): Promise<ToolOutcome> {
   if (!isToolName(name)) {
     return { text: `未知工具：${name}`, isError: true };
   }
+  if (name === "run_batch") return handleBatchCall(rawArgs, invoke, limits);
+
   let reply: ToolReply;
   try {
     reply = await invoke(name, asRecord(rawArgs));
@@ -158,5 +298,5 @@ export async function handleToolCall(
     return { text: `调用失败：${error instanceof Error ? error.message : String(error)}`, isError: true };
   }
   const outcome = name === "run_psh" ? formatPsh(reply) : formatReadFile(reply);
-  return { text: truncateText(outcome.text, maxOutputChars), isError: outcome.isError };
+  return { text: truncateText(outcome.text, limits.maxOutputChars), isError: outcome.isError };
 }

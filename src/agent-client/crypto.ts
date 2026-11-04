@@ -6,8 +6,11 @@
  */
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 
-/** 握手报文里的协议版本；与客户端不等即拒绝，不做兼容分支。 */
-export const PROTOCOL_VERSION = 1;
+/**
+ * 握手报文里的协议版本；与客户端不等即拒绝，不做兼容分支。
+ * v2 新增 `run_batch`（批量执行），线协议不兼容 v1，故两端必须同为 2。
+ */
+export const PROTOCOL_VERSION = 2;
 
 /** 单帧载荷上限 64 MiB：防止对端一个长度头就把内存吃光。 */
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024;

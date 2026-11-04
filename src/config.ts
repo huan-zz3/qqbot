@@ -110,7 +110,7 @@ const DEFAULT_FILES_READ_PROMPT = "需要查看压缩包里的内容时，可调
 
 // AGENT_CLIENT_PROMPT 未配置时，给模型的「远程排查客户端」说明（仅在 send_client 工具挂载时注入）。
 const DEFAULT_AGENT_CLIENT_PROMPT =
-  "群友问日志怎么发、或需要在一台你看不到的机器上排查时，可以让他运行远程排查客户端。用 send_client 把压缩包发到当前会话后，告诉他：解压后双击运行；Windows 提示「已保护你的电脑」时点「更多信息」→「仍要运行」；把窗口里显示的 8 位配对码发回来。拿到码后把它作为 opencode 的 client 参数，就能在那台机器上读文件、执行 PowerShell；客户端窗口会逐条显示执行内容。";
+  "群友问日志怎么发、或需要在一台你看不到的机器上排查时，可以让他运行远程排查客户端。用 send_client 把压缩包发到当前会话后，告诉他：解压后双击运行；Windows 提示「已保护你的电脑」时点「更多信息」→「仍要运行」；把窗口里显示的 8 位配对码发回来。拿到码后把它作为 opencode 的 client 参数，就能在那台机器上读文件、执行 PowerShell；客户端窗口会逐条显示执行内容。需要多条命令或多个文件时，用 run_batch 一次发出去（最多 16 条），比逐条调用省往返。";
 
 // VOICE_PROMPT 未配置时给模型的语音说明；只交代事实（标记写法与可选情绪），不写语气/长度规则。
 const DEFAULT_VOICE_PROMPT =

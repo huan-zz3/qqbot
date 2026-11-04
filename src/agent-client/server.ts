@@ -39,6 +39,13 @@ import {
   randomNonce,
   seal,
 } from "./crypto.js";
+import {
+  batchBudgetMs,
+  batchMaxTotalChars,
+  clampMaxBytes,
+  clampPshTimeoutMs,
+  planBatch,
+} from "./batch.js";
 import { PairingRegistry, type PairingEntry } from "./registry.js";
 import { TOOL_DEFINITIONS, handleToolCall, type ToolName, type ToolReply } from "./tools.js";
 import type { AgentClient } from "./types.js";
@@ -59,9 +66,6 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
  */
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const HEARTBEAT_TIMEOUT_MS = 45_000;
-
-/** read_file 未指定 max_bytes 时的缺省值（256 KiB）。 */
-const DEFAULT_MAX_BYTES = 262_144;
 
 export type AgentClientServerOptions = {
   /** 客户端入口绑定地址（经 frp 暴露）。 */
@@ -657,31 +661,50 @@ export class AgentClientServer implements AgentClient {
 
   /**
    * 模型给的数字不可信：不打穿超时预算（pshTimeoutMs），也不让 read_file 一次读走上 GB。
-   * 非法类型（字符串等）按缺省值处理，绝不原样透传给客户端。
+   * 非法类型（字符串等）按缺省值处理，绝不原样透传给客户端；钳位规则全部在 batch.ts。
    */
-  private clampArgs(tool: ToolName, args: Record<string, unknown>): Record<string, unknown> {
+  private clampArgs(
+    tool: ToolName,
+    args: Record<string, unknown>,
+  ): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
+    const limits = {
+      pshTimeoutMs: this.options.pshTimeoutMs,
+      maxOutputChars: this.options.maxOutputChars,
+    };
+    if (tool === "run_batch") {
+      // tools.ts 已校验过一次；这里再走同一份纯逻辑，保证「下发的项」一定结构合法。
+      const plan = planBatch(args.items, limits);
+      if (!plan.ok) return { ok: false, error: plan.error };
+      if (plan.dispatch.length === 0) {
+        return { ok: false, error: "没有可执行的项：items 全部结构非法" };
+      }
+      return {
+        ok: true,
+        args: {
+          items: plan.dispatch.map((entry) => entry.item),
+          budget_ms: batchBudgetMs(this.options.callTimeoutMs),
+          max_total_chars: batchMaxTotalChars(this.options.maxOutputChars),
+        },
+      };
+    }
     const clamped: Record<string, unknown> = { ...args };
     if (tool === "run_psh") {
-      const raw = args.timeout_ms;
-      const requested = typeof raw === "number" && Number.isFinite(raw) ? raw : this.options.pshTimeoutMs;
-      const max = Math.max(this.options.pshTimeoutMs, 1000);
-      clamped.timeout_ms = Math.min(Math.max(Math.trunc(requested), 1000), max);
+      clamped.timeout_ms = clampPshTimeoutMs(args.timeout_ms, this.options.pshTimeoutMs);
       // 协议要求服务端下发这个字段，客户端用它截断输出。
       clamped.max_output_chars = this.options.maxOutputChars;
     } else {
-      const raw = args.max_bytes;
-      const requested = typeof raw === "number" && Number.isFinite(raw) ? raw : DEFAULT_MAX_BYTES;
-      const max = Math.max(4 * this.options.maxOutputChars, 65_536);
-      clamped.max_bytes = Math.min(Math.max(Math.trunc(requested), 1024), max);
+      clamped.max_bytes = clampMaxBytes(args.max_bytes, this.options.maxOutputChars);
     }
-    return clamped;
+    return { ok: true, args: clamped };
   }
 
   /** 查码 → 找连接 → 钳位参数 → 串行转发；离线/过期都在这里转成可读错误，绝不排队等重连。 */
   private async forward(code: string, tool: ToolName, args: Record<string, unknown>): Promise<ToolReply> {
     const located = this.locate(code);
     if (!located.ok) return { ok: false, error: located.message };
-    return this.enqueueCall(located.conn, tool, this.clampArgs(tool, args));
+    const clamped = this.clampArgs(tool, args);
+    if (!clamped.ok) return { ok: false, error: clamped.error };
+    return this.enqueueCall(located.conn, tool, clamped.args);
   }
 
   /** 同一连接串行：前一个调用（含超时等待）结束后才发下一个。 */
@@ -762,7 +785,10 @@ export class AgentClientServer implements AgentClient {
         request.params.name,
         request.params.arguments,
         (tool, args) => this.forward(code, tool, args),
-        this.options.maxOutputChars,
+        {
+          pshTimeoutMs: this.options.pshTimeoutMs,
+          maxOutputChars: this.options.maxOutputChars,
+        },
       );
       return {
         content: [{ type: "text" as const, text: outcome.text }],

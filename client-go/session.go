@@ -91,6 +91,10 @@ type request struct {
 	ID   string          `json:"id"`
 	Tool string          `json:"tool"`
 	Args json.RawMessage `json:"args"`
+
+	// receivedAt 是读到这一帧的时刻（不是开始执行的时刻）：run_batch 的预算从这里起算。
+	// 客户端串行执行，帧可能在队列里等前一个调用，等待时间同样要吃掉预算。
+	receivedAt time.Time `json:"-"`
 }
 
 type response struct {
@@ -328,6 +332,8 @@ func (s *session) readLoop(ctx context.Context, queue chan<- request, errCh chan
 			deliver(newProtocolError("收到无法解析的报文：%v", err))
 			return
 		}
+		// 记读到这一帧的时刻：run_batch 的预算从这里起算，排队等待前一个调用也要扣。
+		req.receivedAt = time.Now()
 		// 控制帧没有 id，绝不能当成工具回包处理。
 		if req.ID == "" {
 			switch ctrl.Kind {

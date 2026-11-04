@@ -95,11 +95,8 @@ else
   exit 1
 fi
 
-VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n1)"
-if [[ -z "$VERSION" ]]; then
-  echo "错误：无法从 package.json 读取 version" >&2
-  exit 1
-fi
+# 客户端版本与 bot 版本没有对应关系（兼容判定由协议 v 承担），故不读 package.json。
+AGENT_CLIENT_VERSION="${AGENT_CLIENT_VERSION:-0.2.0}"
 
 OUT_DIR="$ROOT/data/agent-client"
 mkdir -p "$OUT_DIR"
@@ -117,7 +114,7 @@ echo "构建客户端（$("$GO_BIN" version)）…"
     .
 )
 
-ZIP_PATH="$OUT_DIR/qqbot-agent-$VERSION-win64.zip"
+ZIP_PATH="$OUT_DIR/qqbot-agent-$AGENT_CLIENT_VERSION-win64.zip"
 rm -f "$ZIP_PATH"
 
 if command -v zip >/dev/null 2>&1; then

@@ -15,8 +15,8 @@ import {
 
 const psk = Buffer.alloc(32, 7);
 
-test("PROTOCOL_VERSION 为 1", () => {
-  assert.equal(PROTOCOL_VERSION, 1);
+test("PROTOCOL_VERSION 为 2", () => {
+  assert.equal(PROTOCOL_VERSION, 2);
 });
 
 test("HKDF：相同输入派生稳定，任一 nonce 变化结果不同", () => {

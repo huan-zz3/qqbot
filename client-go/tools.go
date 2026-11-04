@@ -1,6 +1,6 @@
 package main
 
-// 两个工具的本地实现：run_psh / read_file。串行由 session.serve 保证。
+// 三个工具的本地实现：run_psh / read_file / run_batch。串行由 session.serve 保证。
 
 import (
 	"bytes"
@@ -31,6 +31,15 @@ const (
 	minReadCapBytes = 64 * 1024
 	// killGrace 是超时后等 taskkill 生效的宽限时间。
 	killGrace = 5 * time.Second
+
+	// batchStartMargin 是启动下一项前要求的回包余量（协议：killGrace + 1 秒）。
+	batchStartMargin = time.Second
+	// batchMinTimeoutMS 是每项实际超时的下限（协议：不低于 1000ms）。
+	batchMinTimeoutMS = 1000
+
+	// 未执行项的固定文案，服务端按原文识别。
+	batchBudgetSkip = "未执行（批次预算耗尽）"
+	batchOutputSkip = "未展示（整批输出超限）"
 )
 
 // injectedInt 解析 -ldflags -X 注入的十进制整数；空值或非法时用 fallback。
@@ -97,6 +106,44 @@ type readResult struct {
 	Encoding  string `json:"encoding"`
 }
 
+// batchItem 是批量里的一项；服务端已逐项钳位与校验，客户端仍按 type 做防御。
+type batchItem struct {
+	Type      string `json:"type"`
+	Command   string `json:"command"`
+	TimeoutMS int    `json:"timeout_ms"`
+	Path      string `json:"path"`
+	MaxBytes  int    `json:"max_bytes"`
+}
+
+type batchArgs struct {
+	Items         []batchItem `json:"items"`
+	BudgetMS      int         `json:"budget_ms"`
+	MaxTotalChars int         `json:"max_total_chars"`
+}
+
+// batchOutcome 是批量回包里的一项：成功带 result（形状与单条工具逐字相同），失败只带 error。
+type batchOutcome struct {
+	OK     bool   `json:"ok"`
+	Result any    `json:"result,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+type batchResult struct {
+	Items []batchOutcome `json:"items"`
+}
+
+// batchRunner 是可注入的单条执行器与时钟。
+// 用参数注入而不是环境变量开关：发行二进制里不留测试路径，单测也不再需要真的 PowerShell。
+type batchRunner struct {
+	psh  func(pshArgs) (pshResult, error)
+	read func(readArgs) (readResult, error)
+	now  func() time.Time
+}
+
+func defaultBatchRunner() batchRunner {
+	return batchRunner{psh: runPsh, read: readFile, now: time.Now}
+}
+
 // handleTool 执行一次调用并回包（id 原样带回）。
 func handleTool(u *ui, req request) response {
 	switch req.Tool {
@@ -133,6 +180,22 @@ func handleTool(u *ui, req request) response {
 		u.toolResult(describeRead(result))
 		return response{ID: req.ID, OK: true, Result: result}
 
+	case "run_batch":
+		var args batchArgs
+		if len(req.Args) > 0 {
+			if err := json.Unmarshal(req.Args, &args); err != nil {
+				u.toolCall(req.Tool, summarize(string(req.Args), 120))
+				return failCall(u, req.ID, fmt.Sprintf("参数不是合法 JSON：%v", err))
+			}
+		}
+		if len(args.Items) == 0 {
+			u.toolCall(req.Tool, "（items 为空）")
+			return failCall(u, req.ID, "items 为空（run_batch 至少 1 项）")
+		}
+		u.batchStart(len(args.Items))
+		result := handleBatch(u, args, req.receivedAt, defaultBatchRunner())
+		return response{ID: req.ID, OK: true, Result: result}
+
 	default:
 		u.toolCall(req.Tool, "（未知工具）")
 		return failCall(u, req.ID, "未知工具："+req.Tool)
@@ -142,6 +205,124 @@ func handleTool(u *ui, req request) response {
 func failCall(u *ui, id, message string) response {
 	u.toolResult("失败：" + message)
 	return response{ID: id, OK: false, Error: message}
+}
+
+// handleBatch 按序串行执行一批项；回包长度与顺序和请求一致，未执行的项也占位。
+// started 是收到该帧的时刻：预算从那一刻起算，排队等前一个调用的时间也算在内。
+func handleBatch(u *ui, args batchArgs, started time.Time, runner batchRunner) batchResult {
+	if started.IsZero() {
+		started = runner.now()
+	}
+	items := args.Items
+	n := len(items)
+	outcomes := make([]batchOutcome, 0, n)
+
+	budgetMS := args.BudgetMS
+	if budgetMS <= 0 {
+		// 预算缺失/非法时按本地单条上限跑一轮，避免十几项各自跑满 60 秒。
+		budgetMS = pshTimeoutLimit()
+	}
+	deadline := started.Add(time.Duration(budgetMS) * time.Millisecond)
+
+	charLimit := args.MaxTotalChars
+	if charLimit <= 0 {
+		charLimit = 4 * outputCharLimit()
+	}
+
+	used := 0
+	budgetOut, outputOut := false, false
+
+	for i, item := range items {
+		index := i + 1
+		if budgetOut {
+			u.toolCallAt(index, n, "（跳过）", batchBudgetSkip)
+			outcomes = append(outcomes, batchOutcome{Error: batchBudgetSkip})
+			continue
+		}
+		if outputOut {
+			u.toolCallAt(index, n, "（跳过）", batchOutputSkip)
+			outcomes = append(outcomes, batchOutcome{Error: batchOutputSkip})
+			continue
+		}
+		if remaining := deadline.Sub(runner.now()); remaining < killGrace+batchStartMargin {
+			// 剩余连一秒钟的命令带 taskkill 宽限都装不下：后面的一律不启动，明确标未执行。
+			budgetOut = true
+			u.toolCallAt(index, n, "（跳过）", batchBudgetSkip)
+			outcomes = append(outcomes, batchOutcome{Error: batchBudgetSkip})
+			continue
+		}
+
+		switch item.Type {
+		case "psh":
+			if strings.TrimSpace(item.Command) == "" {
+				u.toolCallAt(index, n, "run_psh", "（命令为空）")
+				u.toolResultAt(index, n, "失败：command 为空")
+				outcomes = append(outcomes, batchOutcome{Error: "command 为空"})
+				continue
+			}
+			u.toolCallAt(index, n, "run_psh", summarize(item.Command, 120))
+			timeoutMS := batchItemTimeout(item.TimeoutMS, deadline.Sub(runner.now()))
+			res, err := runner.psh(pshArgs{Command: item.Command, TimeoutMS: timeoutMS})
+			if err != nil {
+				u.toolResultAt(index, n, "失败："+err.Error())
+				outcomes = append(outcomes, batchOutcome{Error: err.Error()})
+				continue
+			}
+			u.toolResultAt(index, n, describePsh(res, timeoutMS))
+			outcomes = append(outcomes, batchOutcome{OK: true, Result: res})
+			used += utf8.RuneCountInString(res.Stdout) + utf8.RuneCountInString(res.Stderr)
+
+		case "read":
+			if item.Path == "" {
+				u.toolCallAt(index, n, "read_file", "（路径为空）")
+				u.toolResultAt(index, n, "失败：path 为空")
+				outcomes = append(outcomes, batchOutcome{Error: "path 为空"})
+				continue
+			}
+			u.toolCallAt(index, n, "read_file", summarize(item.Path, 120))
+			res, err := runner.read(readArgs{Path: item.Path, MaxBytes: item.MaxBytes})
+			if err != nil {
+				u.toolResultAt(index, n, "失败："+err.Error())
+				outcomes = append(outcomes, batchOutcome{Error: err.Error()})
+				continue
+			}
+			u.toolResultAt(index, n, describeRead(res))
+			outcomes = append(outcomes, batchOutcome{OK: true, Result: res})
+			used += utf8.RuneCountInString(res.Text)
+
+		default:
+			// 服务端已拦住结构非法的项；这里只防畸形帧，失败一项不影响其余。
+			kind := item.Type
+			if kind == "" {
+				kind = "（空）"
+			}
+			message := fmt.Sprintf("未知指令类型：%s，应为 psh 或 read", kind)
+			u.toolCallAt(index, n, "（未知）", message)
+			outcomes = append(outcomes, batchOutcome{Error: message})
+		}
+
+		if used >= charLimit {
+			outputOut = true
+		}
+	}
+
+	return batchResult{Items: outcomes}
+}
+
+// batchItemTimeout 取「下发值、本地上限、剩余预算减 killGrace」三者最小，且不低于 1 秒。
+func batchItemTimeout(requested int, remaining time.Duration) int {
+	timeoutMS := requested
+	if limit := pshTimeoutLimit(); timeoutMS <= 0 || timeoutMS > limit {
+		timeoutMS = limit
+	}
+	// 必须扣 killGrace：runPsh 超时后还要等 taskkill 生效，不扣就会顶替后端的单次调用计时器。
+	if capMS := int((remaining - killGrace) / time.Millisecond); capMS < timeoutMS {
+		timeoutMS = capMS
+	}
+	if timeoutMS < batchMinTimeoutMS {
+		timeoutMS = batchMinTimeoutMS
+	}
+	return timeoutMS
 }
 
 func describePsh(r pshResult, timeoutMS int) string {

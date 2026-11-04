@@ -32,7 +32,7 @@ var (
 )
 
 const (
-	protocolVersion  = 1
+	protocolVersion  = 2
 	dialTimeout      = 10 * time.Second
 	handshakeTimeout = 10 * time.Second
 	initialBackoff   = 2 * time.Second
@@ -201,6 +201,25 @@ func (u *ui) toolCall(tool, detail string) {
 
 func (u *ui) toolResult(detail string) {
 	u.printf("%s└ %s\n", strings.Repeat(" ", 18), detail)
+}
+
+// batchStart 是批次开跑前的一行摘要：窗口里唯一能把后面几行归到同一批的线索。
+func (u *ui) batchStart(count int) {
+	u.printf("%s 批次：%d 条\n", timestamp(), count)
+}
+
+// toolCallAt / toolResultAt 带 [i/N] 序号，让窗口里跑过什么与回包顺序对得上。
+func (u *ui) toolCallAt(index, total int, tool, detail string) {
+	u.printf("%s  %s%-9s %s\n", timestamp(), batchPrefix(index, total), tool, detail)
+}
+
+func (u *ui) toolResultAt(index, total int, detail string) {
+	prefix := batchPrefix(index, total)
+	u.printf("%s└ %s\n", strings.Repeat(" ", 18+len(prefix)), detail)
+}
+
+func batchPrefix(index, total int) string {
+	return fmt.Sprintf("[%d/%d] ", index, total)
 }
 
 func timestamp() string {
